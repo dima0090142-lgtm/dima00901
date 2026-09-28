@@ -31,6 +31,10 @@ def create_web_app(bot: Bot, db: Database, cfg: Config) -> web.Application:
             text=index_html, content_type="text/html", headers={"Cache-Control": "no-cache"}
         )
 
+    async def photo_url(key: str) -> str:
+        filename = await db.get_setting(key)
+        return f"/uploads/{filename}" if filename else ""
+
     async def content(request: web.Request) -> web.Response:
         faq = await db.list_faq()
         promos = await db.list_promos()
@@ -43,6 +47,8 @@ def create_web_app(bot: Bot, db: Database, cfg: Config) -> web.Application:
             "faq": [{"q": f["question"], "a": f["answer"]} for f in faq],
             "promos": [p["text"] for p in promos],
             "portfolio": [f"/uploads/{p['filename']}" for p in photos],
+            "hero_photo": await photo_url("hero_photo"),
+            "master_photo": await photo_url("master_photo"),
         })
 
     async def apply(request: web.Request) -> web.Response:

@@ -10,7 +10,9 @@
       tg.setHeaderColor("#0a0a0c");
       tg.setBackgroundColor("#0a0a0c");
     } catch (_) { /* старые версии Telegram */ }
-    tg.BackButton.onClick(() => go("home"));
+    tg.BackButton.onClick(() => {
+      if (!lightbox.hidden) closeLightbox(); else go("home");
+    });
   }
 
   const haptic = (type) => {
@@ -46,7 +48,64 @@
     return node;
   }
 
+  // Буквы заголовка — отдельными span, чтобы они появлялись по очереди
+  let letterIndex = 0;
+  document.querySelectorAll(".hero-title .word").forEach((word) => {
+    const text = word.textContent.trim();
+    word.textContent = "";
+    [...text].forEach((ch) => {
+      const span = el("span", "ch", ch);
+      span.style.setProperty("--i", letterIndex++);
+      word.append(span);
+    });
+  });
+
+  // Плавное появление блоков, когда они попадают на экран
+  const revealer = "IntersectionObserver" in window
+    ? new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("in");
+            revealer.unobserve(entry.target);
+          }
+        });
+      }, { threshold: 0.12 })
+    : null;
+  function observeReveals(root) {
+    root.querySelectorAll(".reveal:not(.in)").forEach((node, i) => {
+      node.style.transitionDelay = `${Math.min(i, 6) * 70}ms`;
+      if (revealer) revealer.observe(node); else node.classList.add("in");
+    });
+  }
+
+  function loadImg(img, src) {
+    img.addEventListener("load", () => img.classList.add("loaded"), { once: true });
+    img.src = src;
+  }
+
   function render(c) {
+    if (c.hero_photo) {
+      const bg = $("#hero-bg");
+      const probe = new Image();
+      probe.onload = () => {
+        bg.style.backgroundImage = `url("${c.hero_photo}")`;
+        bg.classList.add("loaded");
+      };
+      probe.src = c.hero_photo;
+    }
+
+    const recent = $("#recent");
+    recent.replaceChildren();
+    c.portfolio.slice(0, 8).forEach((src, i) => {
+      const img = el("img");
+      img.loading = "lazy";
+      img.alt = "Работа мастера";
+      img.src = src;
+      img.addEventListener("click", () => openLightbox(i));
+      recent.append(img);
+    });
+    $("#recent-block").hidden = c.portfolio.length === 0;
+
     const promos = $("#promos");
     promos.replaceChildren();
     c.promos.forEach((raw) => {
@@ -60,16 +119,22 @@
 
     const gallery = $("#gallery");
     gallery.replaceChildren();
-    c.portfolio.forEach((src) => {
+    c.portfolio.forEach((src, i) => {
       const img = el("img");
-      img.src = src;
       img.loading = "lazy";
       img.alt = "Работа мастера";
-      img.addEventListener("click", () => openLightbox(src));
+      img.style.transitionDelay = `${Math.min(i, 8) * 60}ms`;
+      loadImg(img, src);
+      img.addEventListener("click", () => openLightbox(i));
       gallery.append(img);
     });
     $("#gallery-empty").hidden = c.portfolio.length > 0;
 
+    const masterPhoto = $("#master-photo");
+    if (c.master_photo) {
+      masterPhoto.hidden = false;
+      loadImg(masterPhoto, c.master_photo);
+    }
     $("#master").textContent = c.master;
     $("#about-text").textContent = c.about;
     $("#address").textContent = c.address;
@@ -83,6 +148,8 @@
       d.append(el("summary", null, item.q), el("p", null, item.a));
       faq.append(d);
     });
+
+    observeReveals(document);
   }
 
   function openLink(url) {
@@ -95,12 +162,55 @@
     openLink("https://yandex.ru/maps/?text=" + encodeURIComponent(address));
   });
 
+  // ---------- просмотр фото: свайп влево/вправо, тап — закрыть ----------
+
   const lightbox = $("#lightbox");
-  function openLightbox(src) {
-    lightbox.querySelector("img").src = src;
-    lightbox.hidden = false;
+  const lbImg = lightbox.querySelector("img");
+  let lbIndex = 0;
+
+  function showPhoto(i) {
+    const photos = state.content.portfolio;
+    lbIndex = (i + photos.length) % photos.length;
+    lbImg.style.animation = "none";
+    void lbImg.offsetWidth; // перезапуск анимации появления
+    lbImg.style.animation = "";
+    lbImg.src = photos[lbIndex];
+    $("#lb-counter").textContent = photos.length > 1 ? `${lbIndex + 1} / ${photos.length}` : "";
   }
-  lightbox.addEventListener("click", () => { lightbox.hidden = true; });
+  function openLightbox(i) {
+    showPhoto(i);
+    lightbox.hidden = false;
+    haptic();
+  }
+  function closeLightbox() { lightbox.hidden = true; }
+
+  let touchX = null;
+  let moved = false;
+  lightbox.addEventListener("touchstart", (e) => { touchX = e.touches[0].clientX; moved = false; }, { passive: true });
+  lightbox.addEventListener("touchmove", (e) => {
+    if (touchX === null) return;
+    const dx = e.touches[0].clientX - touchX;
+    if (Math.abs(dx) > 8) moved = true;
+    lbImg.style.transform = `translateX(${dx}px)`;
+    lbImg.style.opacity = String(1 - Math.min(Math.abs(dx) / 400, 0.5));
+  }, { passive: true });
+  lightbox.addEventListener("touchend", (e) => {
+    const dx = e.changedTouches[0].clientX - touchX;
+    touchX = null;
+    lbImg.style.transform = "";
+    lbImg.style.opacity = "";
+    if (Math.abs(dx) > 60 && state.content.portfolio.length > 1) {
+      showPhoto(lbIndex + (dx < 0 ? 1 : -1));
+      haptic();
+    }
+  });
+  lightbox.addEventListener("click", () => { if (!moved) closeLightbox(); moved = false; });
+  document.addEventListener("keydown", (e) => {
+    if (lightbox.hidden) return;
+    if (e.key === "Escape") closeLightbox();
+    if (e.key === "ArrowRight") showPhoto(lbIndex + 1);
+    if (e.key === "ArrowLeft") showPhoto(lbIndex - 1);
+  });
 
   fetch("/api/content")
     .then((r) => r.json())

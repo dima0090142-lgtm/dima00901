@@ -48,6 +48,7 @@ class AdminStates(StatesGroup):
     port_photos = State()
     edit_text = State()
     post_text = State()
+    design_photo = State()
 
 
 TEXT_KEYS = {"about": "О салоне", "address": "Адрес", "contacts": "Контакты"}
@@ -66,7 +67,7 @@ BACK = [btn("⬅️ В меню", "adm:menu")]
 MENU_KB = kb(
     [btn("📋 Заявки", "adm:apps"), btn("📅 Сеансы", "adm:appts")],
     [btn("📣 Рассылка", "adm:bcast"), btn("🔥 Акции", "adm:promos")],
-    [btn("❓ FAQ", "adm:faq"), btn("🖼 Портфолио", "adm:port")],
+    [btn("❓ FAQ", "adm:faq"), btn("🖼 Фото", "adm:port")],
     [btn("✏️ Тексты", "adm:texts"), btn("📢 Пост в канал", "adm:post")],
 )
 MENU_TEXT = "<b>Панель администратора</b>\n\nВыберите раздел. Отменить любое действие: /cancel"
@@ -526,16 +527,18 @@ async def faq_answer(message: Message, state: FSMContext, db: Database) -> None:
 # ---------- портфолио ----------
 
 PORT_DONE_KB = kb([btn("✅ Готово", "adm:port")])
+DESIGN_PHOTOS = {"hero_photo": "🌅 Фон главного экрана", "master_photo": "👩‍🎨 Фото мастера"}
 
 
 @router.callback_query(F.data == "adm:port")
 async def portfolio(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
     await state.clear()
     count = len(await db.list_portfolio())
-    rows = [[btn("➕ Добавить фото", "port:add")]]
+    rows = [[btn("➕ Добавить фото работ", "port:add")]]
     if count:
         rows.append([btn("👀 Просмотр и удаление", "port:view:0")])
-    await show(callback, f"<b>Портфолио</b>\n\nСейчас в галерее фото: {count}", kb(*rows, BACK))
+    rows.extend([btn(label, f"dph:{key}")] for key, label in DESIGN_PHOTOS.items())
+    await show(callback, f"<b>Фото в приложении</b>\n\nРабот в галерее: {count}", kb(*rows, BACK))
     await callback.answer()
 
 
@@ -607,6 +610,65 @@ async def port_del(callback: CallbackQuery, db: Database, cfg: Config) -> None:
         await db.delete_portfolio(photo["id"])
         (cfg.uploads_dir / photo["filename"]).unlink(missing_ok=True)
     await render_photo(callback, db, cfg, max(int(idx) - 1, 0))
+
+
+@router.callback_query(F.data.startswith("dph:"))
+async def design_photo(callback: CallbackQuery, state: FSMContext, db: Database, cfg: Config) -> None:
+    key = callback.data.split(":")[1]
+    current = await db.get_setting(key)
+    await state.set_state(AdminStates.design_photo)
+    await state.update_data(key=key)
+    hint = (
+        "Пришлите фото — оно сразу появится в приложении.\n"
+        + ("Лучше вертикальное и тёмное: поверх него будет надпись «ТАТУ КУЛЬТ»." if key == "hero_photo"
+           else "Лучше вертикальный портрет.")
+    )
+    rows = [[btn("🗑 Убрать фото", f"dphdel:{key}")]] if current else []
+    text = f"<b>{DESIGN_PHOTOS[key]}</b>\n\n{hint}"
+    if current and (cfg.uploads_dir / current).exists():
+        await callback.message.delete()
+        await callback.message.answer_photo(
+            FSInputFile(cfg.uploads_dir / current), caption=f"Сейчас так 👆\n\n{text}",
+            reply_markup=kb(*rows, [btn("⬅️ Назад", "adm:port")]),
+        )
+    else:
+        await show(callback, text, kb(*rows, [btn("⬅️ Назад", "adm:port")]))
+    await callback.answer()
+
+
+async def replace_design_photo(db: Database, cfg: Config, key: str, filename: str | None) -> None:
+    old = await db.get_setting(key)
+    if old:
+        (cfg.uploads_dir / old).unlink(missing_ok=True)
+    if filename:
+        await db.set_setting(key, filename)
+    else:
+        await db.execute("DELETE FROM settings WHERE key = ?", key)
+
+
+@router.message(AdminStates.design_photo, F.photo)
+async def design_photo_save(message: Message, state: FSMContext, db: Database, cfg: Config, bot: Bot) -> None:
+    key = (await state.get_data())["key"]
+    filename = f"{uuid.uuid4().hex}.jpg"
+    cfg.uploads_dir.mkdir(parents=True, exist_ok=True)
+    await bot.download(message.photo[-1], destination=cfg.uploads_dir / filename)
+    await replace_design_photo(db, cfg, key, filename)
+    await state.clear()
+    await message.answer(f"✅ {DESIGN_PHOTOS[key]}: фото обновлено.", reply_markup=kb([btn("⬅️ Назад", "adm:port")]))
+
+
+@router.message(AdminStates.design_photo)
+async def design_photo_wrong(message: Message) -> None:
+    await message.answer("Пришлите именно фото (не файлом) или /cancel")
+
+
+@router.callback_query(F.data.startswith("dphdel:"))
+async def design_photo_delete(callback: CallbackQuery, state: FSMContext, db: Database, cfg: Config) -> None:
+    await state.clear()
+    key = callback.data.split(":")[1]
+    await replace_design_photo(db, cfg, key, None)
+    await callback.answer("Фото убрано")
+    await show(callback, f"{DESIGN_PHOTOS[key]}: фото убрано.", kb([btn("⬅️ Назад", "adm:port")]))
 
 
 # ---------- тексты ----------
