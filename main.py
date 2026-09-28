@@ -33,9 +33,12 @@ async def setup_bot_ui(bot: Bot, cfg: Config) -> None:
         except Exception:
             log.warning("Админ %s ещё не писал боту — команды для него не установлены", admin_id)
     if cfg.webapp_url:
-        await bot.set_chat_menu_button(
-            menu_button=MenuButtonWebApp(text="Записаться", web_app=WebAppInfo(url=cfg.webapp_url))
-        )
+        try:
+            await bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(text="Записаться", web_app=WebAppInfo(url=cfg.webapp_url))
+            )
+        except Exception as e:
+            log.error("Не удалось установить кнопку меню (проверьте WEBAPP_URL): %s", e)
     else:
         log.warning("WEBAPP_URL не задан — кнопка приложения в боте не появится")
 

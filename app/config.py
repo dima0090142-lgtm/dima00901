@@ -1,4 +1,5 @@
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -25,8 +26,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 WEBAPP_DIR = BASE_DIR / "webapp"
 
 
+def _https(url: str) -> str:
+    """Telegram принимает только https-ссылки — дописываем схему, если её забыли."""
+    url = url.strip().rstrip("/")
+    if url and not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    return url.replace("http://", "https://", 1)
+
+
 def _int_list(value: str) -> list[int]:
-    return [int(x) for x in value.replace(";", ",").split(",") if x.strip()]
+    return [int(x) for x in re.findall(r"-?\d+", value)]
 
 
 @dataclass(frozen=True)
@@ -64,7 +73,7 @@ class Config:
         return cls(
             bot_token=token,
             admin_ids=_int_list(os.getenv("ADMIN_IDS", "")),
-            webapp_url=os.getenv("WEBAPP_URL", "").strip().rstrip("/"),
+            webapp_url=_https(os.getenv("WEBAPP_URL", "")),
             channel_id=os.getenv("CHANNEL_ID", "").strip(),
             miniapp_link=os.getenv("MINIAPP_LINK", "").strip(),
             data_dir=Path(os.getenv("DATA_DIR", str(BASE_DIR / "data"))),
