@@ -21,6 +21,7 @@ from aiogram.types import (
     Message,
 )
 
+from .. import VERSION
 from ..common import MONTHS, WEEKDAYS, application_kb, application_text, fmt_dt, parse_dt
 from ..config import Config
 from ..db import Database
@@ -70,7 +71,10 @@ MENU_KB = kb(
     [btn("❓ FAQ", "adm:faq"), btn("🖼 Фото", "adm:port")],
     [btn("✏️ Тексты", "adm:texts"), btn("📢 Пост в канал", "adm:post")],
 )
-MENU_TEXT = "<b>Панель администратора</b>\n\nВыберите раздел. Отменить любое действие: /cancel"
+MENU_TEXT = (
+    "<b>Панель администратора</b>\n\nВыберите раздел. Отменить любое действие: /cancel\n\n"
+    f"<i>Версия бота: {VERSION}</i>"
+)
 
 
 async def show(callback: CallbackQuery, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
@@ -95,6 +99,11 @@ async def show(callback: CallbackQuery, text: str, markup: InlineKeyboardMarkup 
 async def admin_menu(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer(MENU_TEXT, reply_markup=MENU_KB)
+
+
+@router.message(Command("version"))
+async def version(message: Message) -> None:
+    await message.answer(f"Версия бота: <b>{VERSION}</b>")
 
 
 @router.message(Command("cancel"))

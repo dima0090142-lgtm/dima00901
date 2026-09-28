@@ -9,6 +9,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeChat, MenuButtonWebApp, WebAppInfo
 from aiohttp import web
 
+from app import VERSION
 from app.config import Config
 from app.db import Database
 from app.handlers import admin, user
@@ -27,6 +28,7 @@ async def setup_bot_ui(bot: Bot, cfg: Config) -> None:
                     BotCommand(command="start", description="Главное меню"),
                     BotCommand(command="admin", description="Панель администратора"),
                     BotCommand(command="cancel", description="Отменить действие"),
+                    BotCommand(command="version", description="Какая версия бота запущена"),
                 ],
                 scope=BotCommandScopeChat(chat_id=admin_id),
             )
@@ -45,6 +47,7 @@ async def setup_bot_ui(bot: Bot, cfg: Config) -> None:
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    log.info("Запущена версия: %s", VERSION)
     cfg = Config.from_env()
     if not cfg.admin_ids:
         log.warning("ADMIN_IDS не задан — заявки некому присылать. Узнайте свой ID командой /myid")
