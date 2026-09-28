@@ -1,7 +1,10 @@
 import asyncio
+import calendar
 import logging
+import re
 import time
 import uuid
+from datetime import date, datetime, timedelta
 from html import escape
 
 from aiogram import Bot, F, Router
@@ -18,7 +21,7 @@ from aiogram.types import (
     Message,
 )
 
-from ..common import application_kb, application_text, fmt_dt, parse_dt
+from ..common import MONTHS, WEEKDAYS, application_kb, application_text, fmt_dt, parse_dt
 from ..config import Config
 from ..db import Database
 
@@ -130,37 +133,188 @@ async def app_status(callback: CallbackQuery, db: Database, cfg: Config) -> None
     await callback.answer("Готово")
 
 
+# Время, которое предлагается кнопками при назначении сеанса
+SLOT_HOURS = range(10, 22)
+MONTHS_NOMINATIVE = [
+    "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
+]
+NOOP = "noop"
+
+
+@router.callback_query(F.data == NOOP)
+async def noop(callback: CallbackQuery) -> None:
+    await callback.answer()
+
+
+async def busy_days(db: Database, cfg: Config, year: int, month: int) -> set[int]:
+    first = datetime(year, month, 1, tzinfo=cfg.tz)
+    nxt = datetime(year + month // 12, month % 12 + 1, 1, tzinfo=cfg.tz)
+    appts = await db.appointments_between(int(first.timestamp()), int(nxt.timestamp()))
+    return {datetime.fromtimestamp(a["starts_at"], cfg.tz).day for a in appts}
+
+
+async def calendar_kb(db: Database, cfg: Config, app_id: int, year: int, month: int) -> InlineKeyboardMarkup:
+    today = datetime.now(cfg.tz).date()
+    busy = await busy_days(db, cfg, year, month)
+    prev_y, prev_m = (year - 1, 12) if month == 1 else (year, month - 1)
+    next_y, next_m = (year + 1, 1) if month == 12 else (year, month + 1)
+    can_go_back = (year, month) > (today.year, today.month)
+    rows = [[
+        btn("◀️", f"sc:m:{app_id}:{prev_y}{prev_m:02d}") if can_go_back else btn(" ", NOOP),
+        btn(f"{MONTHS_NOMINATIVE[month - 1]} {year}", NOOP),
+        btn("▶️", f"sc:m:{app_id}:{next_y}{next_m:02d}"),
+    ]]
+    rows.append([btn(d, NOOP) for d in ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")])
+    for week in calendar.Calendar().monthdayscalendar(year, month):
+        row = []
+        for day in week:
+            if day == 0:
+                row.append(btn(" ", NOOP))
+            elif date(year, month, day) < today:
+                row.append(btn("·", NOOP))
+            else:
+                label = f"{day}•" if day in busy else str(day)
+                row.append(btn(label, f"sc:d:{app_id}:{year}{month:02d}{day:02d}"))
+        rows.append(row)
+    rows.append([btn("✏️ Ввести вручную", f"sc:man:{app_id}:0"), btn("✖️ Отмена", "sc:cancel")])
+    return kb(*rows)
+
+
+def calendar_text(app: dict) -> str:
+    return f"📅 Сеанс для <b>{escape(app['name'])}</b>\n\nВыберите день.\n• — в этот день уже есть сеансы"
+
+
 @router.callback_query(F.data.startswith("app:sched:"))
-async def sched_start(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
-    app_id = int(callback.data.split(":")[2])
-    app = await db.get_application(app_id)
-    await state.set_state(AdminStates.sched_time)
-    await state.update_data(app_id=app_id)
+async def sched_start(callback: CallbackQuery, state: FSMContext, db: Database, cfg: Config) -> None:
+    await state.clear()
+    app = await db.get_application(int(callback.data.split(":")[2]))
+    now = datetime.now(cfg.tz)
     await callback.message.answer(
-        f"Назначаем сеанс для <b>{escape(app['name'])}</b>.\n\n"
-        "Напишите дату и время в формате <code>ДД.ММ ЧЧ:ММ</code>\n"
-        "Например: <code>12.10 15:30</code>\n\nОтмена: /cancel"
+        calendar_text(app), reply_markup=await calendar_kb(db, cfg, app["id"], now.year, now.month)
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("sc:m:"))
+async def sched_month(callback: CallbackQuery, db: Database, cfg: Config) -> None:
+    _, _, app_id, ym = callback.data.split(":")
+    app = await db.get_application(int(app_id))
+    await callback.message.edit_text(
+        calendar_text(app), reply_markup=await calendar_kb(db, cfg, app["id"], int(ym[:4]), int(ym[4:]))
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("sc:d:"))
+async def sched_day(callback: CallbackQuery, db: Database, cfg: Config) -> None:
+    _, _, app_id, ymd = callback.data.split(":")
+    app = await db.get_application(int(app_id))
+    day = datetime.strptime(ymd, "%Y%m%d").replace(tzinfo=cfg.tz)
+    appts = await db.appointments_between(int(day.timestamp()), int((day + timedelta(days=1)).timestamp()))
+    busy_hours = {datetime.fromtimestamp(a["starts_at"], cfg.tz).hour for a in appts}
+    now = datetime.now(cfg.tz)
+
+    buttons = []
+    for hour in SLOT_HOURS:
+        slot = day.replace(hour=hour)
+        if slot <= now:
+            continue
+        label = f"🔸{hour}:00" if hour in busy_hours else f"{hour}:00"
+        buttons.append(btn(label, f"sc:t:{app_id}:{ymd}{hour:02d}00"))
+    rows = [buttons[i:i + 4] for i in range(0, len(buttons), 4)]
+    rows.append([btn("🕐 Другое время", f"sc:man:{app_id}:{ymd}")])
+    rows.append([btn("⬅️ К календарю", f"sc:m:{app_id}:{ymd[:6]}"), btn("✖️ Отмена", "sc:cancel")])
+
+    lines = [f"📅 Сеанс для <b>{escape(app['name'])}</b>", f"\n<b>{fmt_date(day)}</b> — выберите время."]
+    if appts:
+        lines.append("\nУже записаны в этот день:")
+        lines += [f"🔸 {datetime.fromtimestamp(a['starts_at'], cfg.tz):%H:%M} — {escape(a['name'])}" for a in appts]
+    if not buttons:
+        lines.append("\nСвободных кнопок на сегодня не осталось — нажмите «Другое время».")
+    await callback.message.edit_text("\n".join(lines), reply_markup=kb(*rows))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("sc:t:"))
+async def sched_time_pick(callback: CallbackQuery, db: Database, cfg: Config) -> None:
+    _, _, app_id, stamp = callback.data.split(":")
+    app = await db.get_application(int(app_id))
+    dt = datetime.strptime(stamp, "%Y%m%d%H%M").replace(tzinfo=cfg.tz)
+    await callback.message.edit_text(
+        f"Записать <b>{escape(app['name'])}</b> на <b>{fmt_dt(int(dt.timestamp()), cfg.tz)}</b>?",
+        reply_markup=kb(
+            [btn("✅ Да, записать", f"sc:ok:{app_id}:{stamp}")],
+            [btn("⬅️ Другое время", f"sc:d:{app_id}:{stamp[:8]}")],
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("sc:ok:"))
+async def sched_confirm(callback: CallbackQuery, db: Database, cfg: Config, bot: Bot) -> None:
+    _, _, app_id, stamp = callback.data.split(":")
+    app = await db.get_application(int(app_id))
+    if app["status"] == "scheduled":
+        await callback.answer("Этот клиент уже записан", show_alert=True)
+        return
+    dt = datetime.strptime(stamp, "%Y%m%d%H%M").replace(tzinfo=cfg.tz)
+    if dt <= datetime.now(cfg.tz):
+        await callback.answer("Это время уже прошло — выберите другое", show_alert=True)
+        return
+    await callback.message.edit_text(await book(bot, db, cfg, app, dt), reply_markup=MENU_KB)
+    await callback.answer("Записано ✅")
+
+
+@router.callback_query(F.data == "sc:cancel")
+async def sched_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.message.edit_text("Назначение сеанса отменено.", reply_markup=MENU_KB)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("sc:man:"))
+async def sched_manual(callback: CallbackQuery, state: FSMContext, db: Database, cfg: Config) -> None:
+    _, _, app_id, ymd = callback.data.split(":")
+    await state.set_state(AdminStates.sched_time)
+    await state.update_data(app_id=int(app_id), day=None if ymd == "0" else ymd)
+    if ymd == "0":
+        hint = "Напишите дату и время, например: <code>12.10 15:30</code>"
+    else:
+        day = datetime.strptime(ymd, "%Y%m%d")
+        hint = f"<b>{fmt_date(day)}</b> — напишите время, например: <code>15:30</code>"
+    await callback.message.edit_text(f"{hint}\n\nОтмена: /cancel")
     await callback.answer()
 
 
 @router.message(AdminStates.sched_time, F.text)
 async def sched_finish(message: Message, state: FSMContext, db: Database, cfg: Config, bot: Bot) -> None:
-    dt = parse_dt(message.text, cfg.tz)
-    if dt is None:
-        await message.answer("Не понял дату 🙈 Формат: <code>12.10 15:30</code>. Попробуйте ещё раз или /cancel")
-        return
-    starts_at = int(dt.timestamp())
-    now = int(time.time())
-    if starts_at <= now:
-        await message.answer("Это время уже прошло. Введите дату в будущем или /cancel")
-        return
-
     data = await state.get_data()
+    text = message.text.strip()
+    if data.get("day") and re.fullmatch(r"\d{1,2}[:.]\d{2}", text):
+        day = datetime.strptime(data["day"], "%Y%m%d")
+        text = f"{day:%d.%m.%Y} {text}"
+    dt = parse_dt(text, cfg.tz)
+    if dt is None:
+        await message.answer("Не понял 🙈 Пример: <code>15:30</code> или <code>12.10 15:30</code>. Ещё раз или /cancel")
+        return
+    if dt <= datetime.now(cfg.tz):
+        await message.answer("Это время уже прошло. Введите время в будущем или /cancel")
+        return
     app = await db.get_application(data["app_id"])
     await state.clear()
+    await message.answer(await book(bot, db, cfg, app, dt), reply_markup=MENU_KB)
+
+
+def fmt_date(day: datetime) -> str:
+    return f"{day.day} {MONTHS[day.month - 1]}, {WEEKDAYS[day.weekday()]}"
+
+
+async def book(bot: Bot, db: Database, cfg: Config, app: dict, dt: datetime) -> str:
+    """Создаёт сеанс, уведомляет клиента и возвращает текст для админа."""
+    starts_at = int(dt.timestamp())
     # Если до сеанса меньше суток, отдельное напоминание не нужно — хватит подтверждения
-    await db.add_appointment(app, starts_at, reminded=starts_at - now < 86400)
+    await db.add_appointment(app, starts_at, reminded=starts_at - time.time() < 86400)
     await db.set_application_status(app["id"], "scheduled")
 
     when = fmt_dt(starts_at, cfg.tz)
@@ -178,10 +332,7 @@ async def sched_finish(message: Message, state: FSMContext, db: Database, cfg: C
             "⚠️ Не удалось написать клиенту в Telegram (он не разрешил сообщения от бота). "
             f"Сообщите ему сами: {escape(app['phone'])}"
         )
-    await message.answer(
-        f"📅 Сеанс назначен: <b>{escape(app['name'])}</b> — {when}\n{client_note}",
-        reply_markup=MENU_KB,
-    )
+    return f"📅 Сеанс назначен: <b>{escape(app['name'])}</b> — {when}\n{client_note}"
 
 
 # ---------- сеансы ----------

@@ -192,6 +192,13 @@ class Database:
             "SELECT * FROM appointments WHERE status = 'scheduled' ORDER BY starts_at LIMIT 20"
         )
 
+    async def appointments_between(self, start: int, end: int) -> list[dict]:
+        return await self.fetchall(
+            """SELECT * FROM appointments
+               WHERE status IN ('scheduled', 'came') AND starts_at >= ? AND starts_at < ? ORDER BY starts_at""",
+            start, end,
+        )
+
     async def appointments_to_remind(self, now: int) -> list[dict]:
         return await self.fetchall(
             """SELECT * FROM appointments
