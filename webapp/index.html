@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Тату-Культ</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=PT+Serif:wght@400;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css?v=__V__">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <button class="brand" data-go="home">ТАТУ-КУЛЬТ</button>
+    <nav class="pills">
+      <button class="pill" data-go="works">Работы</button>
+      <button class="pill" data-go="about">О салоне</button>
+      <button class="pill" data-go="faq">FAQ</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- Главная -->
+    <section class="screen active" id="home">
+      <div class="hero">
+        <h1 class="hero-title">ТАТУ<br>КУЛЬТ</h1>
+        <div class="rule"></div>
+        <p class="hero-sub">Татуировка • Искусство • Культура</p>
+        <p class="hero-tagline">Место, где искусство останется с Вами навсегда</p>
+        <div class="rule"></div>
+        <button class="cta" data-go="form">Записаться на консультацию</button>
+      </div>
+
+      <div class="block" id="promos-block" hidden>
+        <h2 class="section-title">Акции</h2>
+        <div id="promos"></div>
+      </div>
+
+      <div class="block">
+        <div class="tiles">
+          <button class="tile" data-go="works"><span class="tile-title">Работы</span><span class="tile-sub">Портфолио мастера</span></button>
+          <button class="tile" data-go="about"><span class="tile-title">О салоне</span><span class="tile-sub">Мастер и адрес</span></button>
+          <button class="tile" data-go="faq"><span class="tile-title">FAQ</span><span class="tile-sub">Частые вопросы</span></button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Работы -->
+    <section class="screen" id="works">
+      <h2 class="page-title">Работы</h2>
+      <div class="gallery" id="gallery"></div>
+      <p class="empty" id="gallery-empty" hidden>Скоро здесь появятся работы мастера.</p>
+      <button class="cta cta-wide" data-go="form">Хочу тату</button>
+    </section>
+
+    <!-- О салоне -->
+    <section class="screen" id="about">
+      <h2 class="page-title">О салоне</h2>
+      <div class="card">
+        <p class="label">Мастер</p>
+        <p class="master" id="master"></p>
+        <p class="text" id="about-text"></p>
+      </div>
+      <div class="card">
+        <p class="label">Адрес</p>
+        <p class="text" id="address"></p>
+        <button class="link-btn" id="map-btn">Открыть на карте →</button>
+      </div>
+      <div class="card" id="contacts-card">
+        <p class="label">Контакты</p>
+        <p class="text" id="contacts"></p>
+      </div>
+      <button class="cta cta-wide" data-go="form">Записаться на консультацию</button>
+    </section>
+
+    <!-- FAQ -->
+    <section class="screen" id="faq">
+      <h2 class="page-title">Частые вопросы</h2>
+      <div id="faq-list"></div>
+    </section>
+
+    <!-- Форма -->
+    <section class="screen" id="form">
+      <h2 class="page-title">Запись на консультацию</h2>
+      <p class="lead">Оставьте заявку — мастер свяжется с вами, обсудит идею и подберёт удобное время.</p>
+      <form id="apply-form" novalidate>
+        <label class="field">
+          <span>Ваше имя</span>
+          <input name="name" autocomplete="given-name" maxlength="100" required>
+        </label>
+        <label class="field">
+          <span>Номер телефона</span>
+          <input name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+7 ___ ___-__-__" maxlength="40" required>
+        </label>
+        <label class="field">
+          <span>Идея татуировки</span>
+          <textarea name="idea" rows="5" maxlength="1500" placeholder="Что хотите набить, примерный размер, место на теле"></textarea>
+        </label>
+        <p class="error" id="form-error" hidden></p>
+        <button class="cta cta-wide" type="submit" id="submit-btn">Отправить заявку</button>
+        <p class="hint">Нажимая кнопку, вы соглашаетесь на обработку персональных данных. Стоимость обсуждается на консультации.</p>
+      </form>
+    </section>
+
+    <!-- Успех -->
+    <section class="screen" id="success">
+      <div class="hero hero-small">
+        <p class="hero-sub">Заявка отправлена</p>
+        <div class="rule"></div>
+        <h2 class="success-title">Спасибо!</h2>
+        <p class="hero-tagline" id="success-text">Мастер свяжется с вами в ближайшее время.</p>
+        <button class="cta" data-go="home">На главную</button>
+      </div>
+    </section>
+  </main>
+
+  <div class="lightbox" id="lightbox" hidden><img alt=""></div>
+
+  <script src="/static/app.js?v=__V__"></script>
+</body>
+</html>
