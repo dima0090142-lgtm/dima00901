@@ -7,6 +7,20 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Русские буквы, похожие на латинские, — частая опечатка в названиях переменных в панели хостинга
+_LOOKALIKES = str.maketrans("АВЕКМНОРСТХУ", "ABEKMHOPCTXY")
+
+
+def _normalize_env() -> None:
+    """Принимает «bot_token», « BOT_TOKEN » или BOT_TОKEN с русской «О» как BOT_TOKEN."""
+    for key, value in list(os.environ.items()):
+        name = key.strip().upper().translate(_LOOKALIKES)
+        if name != key and name not in os.environ:
+            os.environ[name] = value
+
+
+_normalize_env()
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 WEBAPP_DIR = BASE_DIR / "webapp"
 
@@ -41,7 +55,12 @@ class Config:
     def from_env(cls) -> "Config":
         token = os.getenv("BOT_TOKEN", "").strip()
         if not token:
-            raise RuntimeError("Не задан BOT_TOKEN (см. .env.example)")
+            # Печатаем только названия переменных (без значений), чтобы было видно опечатку
+            names = sorted(k for k in os.environ if not k.startswith(("PYTHON", "LC_", "LANG", "GPG")))
+            raise RuntimeError(
+                "Не задан BOT_TOKEN. Добавьте переменную BOT_TOKEN (на запуск) и перезапустите приложение. "
+                f"Переменные, которые видит приложение: {', '.join(names)}"
+            )
         return cls(
             bot_token=token,
             admin_ids=_int_list(os.getenv("ADMIN_IDS", "")),
