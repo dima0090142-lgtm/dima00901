@@ -95,7 +95,8 @@ DEFAULT_SETTINGS = {
         "Мастер — Дарья. Каждый эскиз создаётся индивидуально: "
         "обсудим идею на консультации и подберём стиль, размер и место."
     ),
-    "address": "Владивосток, Светланская 23, стр. 2, 3 этаж",
+    "address": "Владивосток, Светланская ул., 23, стр. 2, этаж 3",
+    "map_url": "https://yandex.ru/maps/org/tattoo_kult/59781186856/",
     "contacts": "Запись и вопросы — через это приложение или в личные сообщения Telegram.",
     "aftercare": (
         "Спасибо, что выбрали Тату-Культ! 🖤\n\n"
@@ -175,6 +176,11 @@ class Database:
             await self.conn.execute(
                 "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value)
             )
+        # Уточнённый адрес студии: меняем только старый текст по умолчанию, свой текст админа не трогаем
+        await self.conn.execute(
+            "UPDATE settings SET value = ? WHERE key = 'address' AND value = ?",
+            (DEFAULT_SETTINGS["address"], "Владивосток, Светланская 23, стр. 2, 3 этаж"),
+        )
         # FAQ заполняется примерами один раз — если админ их удалит, они не вернутся
         if await self.get_setting("faq_seeded") is None:
             for q, a in DEFAULT_FAQ:
@@ -378,7 +384,7 @@ class Database:
     async def client_by_user(self, user_id: int) -> dict | None:
         return await self.fetchone("SELECT * FROM clients WHERE user_id = ?", user_id)
 
-    async def link_client(self, client_id: int, user_id: int) -> None:
+    async def link_client(self, client_id: int, user_id: int | None) -> None:
         await self.execute("UPDATE clients SET user_id = ? WHERE id = ?", user_id, client_id)
 
     async def find_clients(self, query: str, limit: int = 10) -> list[dict]:

@@ -163,8 +163,9 @@
     else window.open(url, "_blank");
   }
   function openMap() {
-    const address = (state.content && state.content.address) || "Владивосток, Светланская 23";
-    openLink("https://yandex.ru/maps/?text=" + encodeURIComponent(address));
+    const c = state.content || {};
+    if (c.map_url) return openLink(c.map_url);
+    openLink("https://yandex.ru/maps/?text=" + encodeURIComponent(c.address || "Владивосток, Светланская ул., 23"));
   }
   function openChat() {
     const bot = state.content && state.content.bot;

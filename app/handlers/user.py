@@ -47,17 +47,35 @@ async def start_invite(message: Message, command: CommandObject, db: Database, c
     user = message.from_user
     await db.upsert_user(user.id, user.first_name, user.username)
     client = await db.client_by_invite(command.args[1:])
-    if client and client["user_id"] in (None, user.id):
-        if client["user_id"] is None:
+    if client and user.id in cfg.admin_ids:
+        # Админ открыл ссылку сам, например чтобы проверить — не привязываем его к карточке клиента
+        await message.answer(
+            f"🔑 Это ссылка-приглашение для клиента <b>{escape(client['name'])}</b>. "
+            "Вы администратор, поэтому я ничего не привязал — просто перешлите ссылку клиенту."
+        )
+    elif client and client["user_id"] == user.id:
+        await message.answer(f"Вы уже подключены, {escape(client['name'])} 🖤")
+    elif client and client["user_id"] is None:
+        other = await db.client_by_user(user.id)
+        if other:
+            # Этот Telegram уже привязан к другой карточке — не создаём путаницу, а сообщаем админу
+            await notify_admins(
+                bot, cfg,
+                f"⚠️ По ссылке-приглашению для <b>{escape(client['name'])}</b> ({format_phone(client['phone'])}) "
+                f"перешёл человек, который уже привязан к карточке <b>{escape(other['name'])}</b> "
+                f"({format_phone(other['phone'])}). Я ничего не менял — проверьте карточки в «👥 Клиенты».",
+            )
+            await message.answer("Спасибо! Мы уже знаем вас — напоминания будут приходить сюда 🖤")
+        else:
             await db.link_client(client["id"], user.id)
             await notify_admins(
                 bot, cfg,
                 f"🔗 Клиент <b>{escape(client['name'])}</b> ({format_phone(client['phone'])}) подключился к боту.",
             )
-        await message.answer(
-            f"Готово, {escape(client['name'])}! 🖤\n\n"
-            "Теперь мы пришлём сюда подтверждение записи, напоминание о сеансе и памятку по уходу.",
-        )
+            await message.answer(
+                f"Готово, {escape(client['name'])}! 🖤\n\n"
+                "Теперь мы пришлём сюда подтверждение записи, напоминание о сеансе и памятку по уходу.",
+            )
     await message.answer(welcome_text(cfg, user.id in cfg.admin_ids), reply_markup=booking_kb(cfg.webapp_url))
 
 
