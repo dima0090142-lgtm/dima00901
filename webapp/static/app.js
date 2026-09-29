@@ -157,6 +157,13 @@
     else window.open(url, "_blank");
   }
 
+  document.querySelectorAll("[data-site]").forEach((node) => {
+    node.addEventListener("click", () => {
+      haptic();
+      openLink((state.content && state.content.site) || "https://tattookult.ru");
+    });
+  });
+
   $("#map-btn").addEventListener("click", () => {
     const address = (state.content && state.content.address) || "";
     openLink("https://yandex.ru/maps/?text=" + encodeURIComponent(address));

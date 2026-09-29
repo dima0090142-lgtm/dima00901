@@ -51,6 +51,7 @@ class Config:
     master_name: str
     arrival_check_minutes: int
     telegram_proxy: str
+    site_url: str
 
     @property
     def db_path(self) -> Path:
@@ -82,4 +83,5 @@ class Config:
             master_name=os.getenv("MASTER_NAME", "Дарья"),
             arrival_check_minutes=int(os.getenv("ARRIVAL_CHECK_MINUTES", "30")),
             telegram_proxy=os.getenv("TELEGRAM_PROXY", "").strip(),
+            site_url=os.getenv("SITE_URL", "https://tattookult.ru").strip(),
         )

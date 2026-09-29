@@ -29,16 +29,18 @@ async def tick(bot: Bot, db: Database, cfg: Config) -> None:
 
     for appt in await db.appointments_to_remind(now):
         await db.mark_reminded(appt["id"])
+        if not appt["chat_id"]:
+            continue
         try:
             await bot.send_message(
-                appt["user_id"],
+                appt["chat_id"],
                 f"⏰ <b>Напоминание о сеансе</b>\n\n"
                 f"Ждём вас {fmt_dt(appt['starts_at'], cfg.tz)}\n📍 {escape(address)}\n\n"
                 "Хорошо выспитесь, поешьте и не употребляйте алкоголь. "
                 "Если планы изменились — пожалуйста, предупредите нас.",
             )
         except Exception:
-            log.warning("Не удалось отправить напоминание клиенту %s", appt["user_id"])
+            log.warning("Не удалось отправить напоминание клиенту %s", appt["chat_id"])
 
     for appt in await db.appointments_to_ask(now, cfg.arrival_check_minutes * 60):
         await db.mark_asked(appt["id"])

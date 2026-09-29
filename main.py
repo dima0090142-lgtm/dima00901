@@ -12,7 +12,7 @@ from aiohttp import web
 from app import VERSION
 from app.config import Config
 from app.db import Database
-from app.handlers import admin, user
+from app.handlers import admin, clients, user
 from app.reminders import reminder_loop
 from app.web import create_web_app
 
@@ -58,6 +58,7 @@ async def main() -> None:
     session = AiohttpSession(proxy=cfg.telegram_proxy) if cfg.telegram_proxy else None
     bot = Bot(cfg.bot_token, session=session, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(storage=MemoryStorage(), db=db, cfg=cfg)
+    dp.include_router(clients.router)
     dp.include_router(admin.router)
     dp.include_router(user.router)
 
