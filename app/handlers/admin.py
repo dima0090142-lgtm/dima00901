@@ -86,8 +86,10 @@ MARKETING_KB = kb(
 SETTINGS_KB = kb(
     [btn("❓ FAQ", "adm:faq"), btn("🔥 Акции", "adm:promos")],
     [btn("🖼 Фото", "adm:port"), btn("✏️ Тексты", "adm:texts")],
+    [btn("🎨 Оформление", "adm:theme")],
     [btn("⬅️ В меню", "adm:menu")],
 )
+THEMES = {"classic": "Классика (как на сайте)", "glass": "Liquid Glass (стекло, как в iOS)"}
 MARKETING_BACK = [btn("⬅️ Продвижение", "adm:mkt")]
 SETTINGS_BACK = [btn("⬅️ Настройки", "adm:settings")]
 
@@ -162,6 +164,35 @@ async def marketing_menu(callback: CallbackQuery, state: FSMContext, db: Databas
         MARKETING_KB,
     )
     await callback.answer()
+
+
+@router.callback_query(F.data == "adm:theme")
+async def theme_menu(callback: CallbackQuery, db: Database) -> None:
+    await render_theme_menu(callback, db)
+    await callback.answer()
+
+
+async def render_theme_menu(callback: CallbackQuery, db: Database) -> None:
+    current = await db.get_setting("theme") or "classic"
+    await show(
+        callback,
+        "<b>🎨 Оформление приложения</b>\n\n"
+        "Выберите, как приложение выглядит у клиентов по умолчанию. "
+        "Каждый клиент может переключить оформление для себя кнопкой ◐ вверху приложения.",
+        kb(
+            *[[btn(("✅ " if key == current else "") + label, f"theme:{key}")] for key, label in THEMES.items()],
+            SETTINGS_BACK,
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("theme:"))
+async def theme_set(callback: CallbackQuery, db: Database) -> None:
+    key = callback.data.split(":")[1]
+    if key in THEMES:
+        await db.set_setting("theme", key)
+    await render_theme_menu(callback, db)
+    await callback.answer(f"Оформление: {THEMES.get(key, '')}")
 
 
 @router.callback_query(F.data == "adm:settings")
