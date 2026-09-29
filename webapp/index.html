@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru" data-theme="__THEME__">
+<html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -8,16 +8,9 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=PT+Serif:wght@400;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css?v=__V__">
-  <link rel="stylesheet" href="/static/glass.css?v=__V__">
-  <script>
-    // Оформление, выбранное самим клиентом, важнее оформления по умолчанию
-    try { var t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
-  </script>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
-  <div class="glass-bg" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
-
   <header class="topbar">
     <button class="brand" data-go="home">ТАТУ-КУЛЬТ</button>
     <nav class="pills">
@@ -25,7 +18,6 @@
       <button class="pill" data-go="about">О салоне</button>
       <button class="pill" data-go="faq">FAQ</button>
     </nav>
-    <button class="theme-btn" id="theme-btn" aria-label="Сменить оформление" title="Сменить оформление"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/></svg></button>
   </header>
 
   <main>
@@ -155,30 +147,6 @@
     <img alt="Работа мастера">
     <p class="lb-counter" id="lb-counter"></p>
   </div>
-
-  <!-- Нижняя панель вкладок — видна в оформлении Liquid Glass -->
-  <nav class="tabbar" aria-label="Разделы">
-    <button class="tab active" data-go="home">
-      <svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>
-      <span>Главная</span>
-    </button>
-    <button class="tab" data-go="works">
-      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/></svg>
-      <span>Работы</span>
-    </button>
-    <button class="tab tab-main" data-go="form">
-      <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-      <span>Запись</span>
-    </button>
-    <button class="tab" data-go="about">
-      <svg viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>
-      <span>Салон</span>
-    </button>
-    <button class="tab" data-go="faq">
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17.5h.01"/></svg>
-      <span>FAQ</span>
-    </button>
-  </nav>
 
   <script src="/static/app.js?v=__V__"></script>
 </body>

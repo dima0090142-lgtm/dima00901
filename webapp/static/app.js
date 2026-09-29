@@ -24,23 +24,12 @@
   function go(screen) {
     if (screen === state.current) return;
     document.querySelectorAll(".screen").forEach((el) => el.classList.toggle("active", el.id === screen));
-    document.querySelectorAll(".pill, .tab").forEach((el) => el.classList.toggle("active", el.dataset.go === screen));
+    document.querySelectorAll(".pill").forEach((el) => el.classList.toggle("active", el.dataset.go === screen));
     state.current = screen;
     window.scrollTo(0, 0);
     if (tg) screen === "home" ? tg.BackButton.hide() : tg.BackButton.show();
     haptic();
   }
-
-  // ---------- оформление: классика / Liquid Glass ----------
-
-  const root = document.documentElement;
-  if (root.dataset.theme !== "glass") root.dataset.theme = "classic";
-  document.getElementById("theme-btn").addEventListener("click", () => {
-    const next = root.dataset.theme === "glass" ? "classic" : "glass";
-    root.dataset.theme = next;
-    try { localStorage.setItem("theme", next); } catch (_) {}
-    haptic("medium");
-  });
 
   document.addEventListener("click", (e) => {
     const target = e.target.closest("[data-go]");
