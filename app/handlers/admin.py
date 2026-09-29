@@ -74,15 +74,39 @@ BACK = [btn("⬅️ В меню", "adm:menu")]
 
 MENU_KB = kb(
     [btn("📋 Заявки", "adm:apps"), btn("📅 Сеансы", "adm:appts")],
-    [btn("📣 Рассылка", "adm:bcast"), btn("🔥 Акции", "adm:promos")],
-    [btn("❓ FAQ", "adm:faq"), btn("🖼 Фото", "adm:port")],
-    [btn("✏️ Тексты", "adm:texts"), btn("📢 Пост в канал", "adm:post")],
     [btn("👥 Клиенты", "cl:menu")],
+    [btn("📣 Продвижение", "adm:mkt"), btn("⚙️ Настройки", "adm:settings")],
 )
-MENU_TEXT = (
-    "<b>Панель администратора</b>\n\nВыберите раздел. Отменить любое действие: /cancel\n\n"
-    f"<i>Версия бота: {VERSION}</i>"
+MARKETING_KB = kb(
+    [btn("📣 Рассылка", "adm:bcast")],
+    [btn("🔥 Акции", "adm:promos")],
+    [btn("📢 Пост в канал", "adm:post")],
+    [btn("⬅️ В меню", "adm:menu")],
 )
+SETTINGS_KB = kb(
+    [btn("❓ FAQ", "adm:faq"), btn("🔥 Акции", "adm:promos")],
+    [btn("🖼 Фото", "adm:port"), btn("✏️ Тексты", "adm:texts")],
+    [btn("⬅️ В меню", "adm:menu")],
+)
+MARKETING_BACK = [btn("⬅️ Продвижение", "adm:mkt")]
+SETTINGS_BACK = [btn("⬅️ Настройки", "adm:settings")]
+
+
+async def menu_text(db: Database) -> str:
+    """Главный экран админки со сводкой."""
+    new_apps = await db.fetchone("SELECT COUNT(*) AS n FROM applications WHERE status = 'new'")
+    upcoming = await db.fetchone(
+        "SELECT COUNT(*) AS n FROM appointments WHERE status = 'scheduled' AND starts_at > ?", int(time.time())
+    )
+    total, _ = await db.count_clients()
+    return (
+        "<b>Панель администратора</b>\n\n"
+        f"🆕 Новых заявок: <b>{new_apps['n']}</b>\n"
+        f"📅 Предстоящих сеансов: <b>{upcoming['n']}</b>\n"
+        f"👥 Клиентов в базе: <b>{total}</b>\n\n"
+        "Отменить любое действие: /cancel\n\n"
+        f"<i>Версия бота: {VERSION}</i>"
+    )
 
 
 async def show(callback: CallbackQuery, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
@@ -104,9 +128,9 @@ async def show(callback: CallbackQuery, text: str, markup: InlineKeyboardMarkup 
 # ---------- меню ----------
 
 @router.message(Command("admin"))
-async def admin_menu(message: Message, state: FSMContext) -> None:
+async def admin_menu(message: Message, state: FSMContext, db: Database) -> None:
     await state.clear()
-    await message.answer(MENU_TEXT, reply_markup=MENU_KB)
+    await message.answer(await menu_text(db), reply_markup=MENU_KB)
 
 
 @router.message(Command("version"))
@@ -121,9 +145,33 @@ async def cancel(message: Message, state: FSMContext) -> None:
 
 
 @router.callback_query(F.data == "adm:menu")
-async def menu_cb(callback: CallbackQuery, state: FSMContext) -> None:
+async def menu_cb(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
     await state.clear()
-    await show(callback, MENU_TEXT, MENU_KB)
+    await show(callback, await menu_text(db), MENU_KB)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "adm:mkt")
+async def marketing_menu(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
+    await state.clear()
+    users = len(await db.active_user_ids())
+    promos = len(await db.list_promos())
+    await show(
+        callback,
+        f"<b>📣 Продвижение</b>\n\nПодписчиков бота: <b>{users}</b>\nАктивных акций: <b>{promos}</b>",
+        MARKETING_KB,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "adm:settings")
+async def settings_menu(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await show(
+        callback,
+        "<b>⚙️ Настройки</b>\n\nЧто показывается в приложении: вопросы, акции, фото и тексты.",
+        SETTINGS_KB,
+    )
     await callback.answer()
 
 
@@ -421,7 +469,7 @@ async def bcast_start(callback: CallbackQuery, state: FSMContext, db: Database) 
         f"<b>Рассылка</b>\n\nПолучателей: {count}\n\n"
         "Пришлите сообщение для рассылки — текст, фото с подписью или видео. "
         "Я покажу, как оно выглядит, и спрошу подтверждение.",
-        kb(BACK),
+        kb(MARKETING_BACK),
     )
     await callback.answer()
 
@@ -485,7 +533,7 @@ async def promos(callback: CallbackQuery, db: Database) -> None:
         rows.append([btn(f"🗑 Удалить акцию {i}", f"promo:del:{p['id']}")])
     if not items:
         lines.append("Пока акций нет.")
-    await show(callback, "\n".join(lines), kb(*rows, [btn("➕ Добавить акцию", "promo:add")], BACK))
+    await show(callback, "\n".join(lines), kb(*rows, [btn("➕ Добавить акцию", "promo:add")], SETTINGS_BACK))
     await callback.answer()
 
 
@@ -502,7 +550,7 @@ async def promo_add(callback: CallbackQuery, state: FSMContext) -> None:
         callback,
         "Пришлите текст акции.\nПервая строка станет заголовком, например:\n\n"
         "<code>−20% на первую татуировку\nДо конца октября при записи через Telegram</code>",
-        kb(BACK),
+        kb(SETTINGS_BACK),
     )
     await callback.answer()
 
@@ -531,7 +579,7 @@ async def faq(callback: CallbackQuery, db: Database) -> None:
         rows.append([btn(f"🗑 Удалить вопрос {i}", f"faq:del:{f['id']}")])
     if not items:
         lines.append("Вопросов пока нет.")
-    await show(callback, "\n".join(lines)[:4000], kb(*rows, [btn("➕ Добавить вопрос", "faq:add")], BACK))
+    await show(callback, "\n".join(lines)[:4000], kb(*rows, [btn("➕ Добавить вопрос", "faq:add")], SETTINGS_BACK))
     await callback.answer()
 
 
@@ -544,7 +592,7 @@ async def faq_del(callback: CallbackQuery, db: Database) -> None:
 @router.callback_query(F.data == "faq:add")
 async def faq_add(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AdminStates.faq_question)
-    await show(callback, "Напишите <b>вопрос</b>:", kb(BACK))
+    await show(callback, "Напишите <b>вопрос</b>:", kb(SETTINGS_BACK))
     await callback.answer()
 
 
@@ -560,7 +608,7 @@ async def faq_answer(message: Message, state: FSMContext, db: Database) -> None:
     data = await state.get_data()
     await db.add_faq(data["question"], message.text.strip()[:2000])
     await state.clear()
-    await message.answer("✅ Вопрос добавлен.", reply_markup=kb([btn("❓ К списку FAQ", "adm:faq")], BACK))
+    await message.answer("✅ Вопрос добавлен.", reply_markup=kb([btn("❓ К списку FAQ", "adm:faq")], SETTINGS_BACK))
 
 
 # ---------- портфолио ----------
@@ -577,7 +625,7 @@ async def portfolio(callback: CallbackQuery, state: FSMContext, db: Database) ->
     if count:
         rows.append([btn("👀 Просмотр и удаление", "port:view:0")])
     rows.extend([btn(label, f"dph:{key}")] for key, label in DESIGN_PHOTOS.items())
-    await show(callback, f"<b>Фото в приложении</b>\n\nРабот в галерее: {count}", kb(*rows, BACK))
+    await show(callback, f"<b>Фото в приложении</b>\n\nРабот в галерее: {count}", kb(*rows, SETTINGS_BACK))
     await callback.answer()
 
 
@@ -717,7 +765,7 @@ async def texts(callback: CallbackQuery) -> None:
     await show(
         callback,
         "<b>Тексты в приложении</b>\n\nЧто хотите изменить?",
-        kb(*[[btn(label, f"txt:{key}")] for key, label in TEXT_KEYS.items()], BACK),
+        kb(*[[btn(label, f"txt:{key}")] for key, label in TEXT_KEYS.items()], SETTINGS_BACK),
     )
     await callback.answer()
 
@@ -757,7 +805,7 @@ DEFAULT_POST = (
 @router.callback_query(F.data == "adm:post")
 async def post_start(callback: CallbackQuery, state: FSMContext, cfg: Config) -> None:
     if not cfg.channel_id:
-        await show(callback, "Канал не настроен: укажите CHANNEL_ID в настройках сервера.", kb(BACK))
+        await show(callback, "Канал не настроен: укажите CHANNEL_ID в настройках сервера.", kb(MARKETING_BACK))
         await callback.answer()
         return
     await state.set_state(AdminStates.post_text)
@@ -765,7 +813,7 @@ async def post_start(callback: CallbackQuery, state: FSMContext, cfg: Config) ->
         callback,
         "Опубликую в канале пост с кнопкой «Записаться».\n\n"
         "Пришлите текст поста или нажмите «Стандартный текст».",
-        kb([btn("📝 Стандартный текст", "post:default")], BACK),
+        kb([btn("📝 Стандартный текст", "post:default")], MARKETING_BACK),
     )
     await callback.answer()
 
