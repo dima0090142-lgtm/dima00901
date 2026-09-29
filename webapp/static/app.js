@@ -96,7 +96,7 @@
 
     const recent = $("#recent");
     recent.replaceChildren();
-    c.portfolio.slice(0, 8).forEach((src, i) => {
+    c.portfolio.forEach((src, i) => {
       const img = el("img");
       img.loading = "lazy";
       img.alt = "Работа мастера";
@@ -117,18 +117,6 @@
     });
     $("#promos-block").hidden = c.promos.length === 0;
 
-    const gallery = $("#gallery");
-    gallery.replaceChildren();
-    c.portfolio.forEach((src, i) => {
-      const img = el("img");
-      img.loading = "lazy";
-      img.alt = "Работа мастера";
-      img.style.transitionDelay = `${Math.min(i, 8) * 60}ms`;
-      loadImg(img, src);
-      img.addEventListener("click", () => openLightbox(i));
-      gallery.append(img);
-    });
-    $("#gallery-empty").hidden = c.portfolio.length > 0;
 
     const masterPhoto = $("#master-photo");
     if (c.master_photo) {
