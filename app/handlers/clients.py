@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, Message
 from ..common import fmt_dt
 from ..config import Config
 from ..db import Database, format_phone
+from ..payments import STATUS as PAY_STATUS, claim_kb, client_request_text, ref, rub
 from .admin import BACK, IsAdmin, btn, calendar_kb, calendar_text, kb, show
 
 router = Router()
@@ -27,6 +28,7 @@ class ClientStates(StatesGroup):
     note = State()
     rename = State()
     write = State()
+    pay_amount = State()
 
 
 CLIENTS_BACK = [btn("⬅️ Клиенты", "cl:menu")]
@@ -172,6 +174,10 @@ async def card(db: Database, cfg: Config, bot: Bot, client_id: int) -> tuple[str
     if appts:
         lines.append("\n<b>Сеансы:</b>")
         lines += [f"{APPT_STATUS.get(a['status'], '•')} {fmt_dt(a['starts_at'], cfg.tz)}" for a in appts]
+    payments = await db.client_payments(client_id)
+    if payments:
+        lines.append("\n<b>Предоплаты:</b>")
+        lines += [f"💳 {rub(p['amount'])} ({ref(p['id'])}) — {PAY_STATUS[p['status']]}" for p in payments]
     lines.append(f"\n<i>Добавлен {datetime.fromtimestamp(c['created_at'], cfg.tz):%d.%m.%Y}</i>")
 
     rows = [[btn("📅 Назначить сеанс", f"cl:book:{client_id}")]]
@@ -179,6 +185,7 @@ async def card(db: Database, cfg: Config, bot: Bot, client_id: int) -> tuple[str
         rows[0].append(btn("✉️ Написать", f"cl:write:{client_id}"))
     else:
         rows.append([btn("🔗 Ссылка-приглашение", f"cl:inv:{client_id}")])
+    rows.append([btn("💳 Предоплата", f"cl:pay:{client_id}")])
     rows.append([btn("📝 Заметка", f"cl:note:{client_id}"), btn("✏️ Имя", f"cl:rename:{client_id}")])
     rows.append([btn("🗑 Удалить", f"cl:del:{client_id}")])
     rows.append(CLIENTS_BACK)
@@ -293,3 +300,88 @@ async def write_send(message: Message, state: FSMContext, db: Database, cfg: Con
     except Exception:
         await message.answer("⚠️ Не удалось отправить: клиент ещё не нажал «Старт» в боте или заблокировал его.")
     await send_card(message, db, cfg, bot, client_id)
+
+
+# ---------- предоплата ----------
+
+@router.callback_query(F.data.startswith("cl:pay:"))
+async def pay_start(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
+    client_id = int(callback.data.split(":")[2])
+    c = await db.get_client(client_id)
+    if not await db.get_setting("pay_details"):
+        await callback.message.answer(
+            "Сначала укажите реквизиты для перевода: «⚙️ Настройки» → «✏️ Тексты» → «Реквизиты для предоплаты».\n\n"
+            "Например:\n<code>По номеру телефона +7 914 000-00-00\nБанк: Сбербанк\nПолучатель: Дарья К.</code>",
+            reply_markup=kb([btn("✏️ Открыть тексты", "adm:texts")]),
+        )
+        await callback.answer()
+        return
+    if not c["started"]:
+        await callback.answer(
+            "Клиент ещё не подключён к боту — сначала отправьте ему ссылку-приглашение.", show_alert=True
+        )
+        return
+    await state.set_state(ClientStates.pay_amount)
+    await state.update_data(client_id=client_id)
+    await callback.message.answer(
+        f"💳 Предоплата для <b>{escape(c['name'])}</b>\n\nНапишите сумму в рублях, например <code>2000</code>\n\nОтмена: /cancel"
+    )
+    await callback.answer()
+
+
+@router.message(ClientStates.pay_amount, F.text)
+async def pay_send(message: Message, state: FSMContext, db: Database, cfg: Config, bot: Bot) -> None:
+    digits = re.sub(r"[\s₽р.,]", "", message.text.lower().replace("руб", ""))
+    if not digits.isdigit() or not 100 <= int(digits) <= 500_000:
+        await message.answer("Напишите сумму числом от 100 до 500 000, например <code>2000</code>, или /cancel")
+        return
+    client_id = (await state.get_data())["client_id"]
+    await state.clear()
+    c = await db.get_client(client_id)
+    payment_id = await db.add_payment(client_id, c["user_id"], int(digits))
+    payment = await db.get_payment(payment_id)
+    try:
+        await bot.send_message(
+            c["user_id"], client_request_text(payment, await db.get_setting("pay_details")),
+            reply_markup=claim_kb(payment_id),
+        )
+        await message.answer(
+            f"✅ Запрос на предоплату {rub(payment['amount'])} отправлен клиенту ({ref(payment_id)}).\n"
+            "Когда клиент нажмёт «Я оплатил», я пришлю уведомление — останется проверить поступление в банке."
+        )
+    except Exception:
+        await db.set_payment_status(payment_id, "cancelled")
+        await message.answer("⚠️ Не удалось отправить клиенту: он заблокировал бота или ещё не нажимал «Старт».")
+    await send_card(message, db, cfg, bot, client_id)
+
+
+@router.callback_query(F.data.startswith("pay:ok:") | F.data.startswith("pay:no:"))
+async def pay_decision(callback: CallbackQuery, db: Database, bot: Bot) -> None:
+    _, action, payment_id = callback.data.split(":")
+    payment = await db.get_payment(int(payment_id))
+    if payment is None or payment["status"] == "paid":
+        await callback.answer("Эта оплата уже подтверждена", show_alert=True)
+        return
+    if action == "ok":
+        await db.set_payment_status(payment["id"], "paid")
+        client_text = (
+            f"✅ <b>Предоплата {rub(payment['amount'])} получена!</b>\n\n"
+            "Спасибо, ваша запись закреплена. Ждём вас 🖤"
+        )
+        note = "✅ Оплата подтверждена, клиенту отправлено уведомление."
+        client_kb = None
+    else:
+        await db.set_payment_status(payment["id"], "pending")
+        client_text = (
+            f"Мы пока не видим перевод на {rub(payment['amount'])} ({ref(payment['id'])}) 🙏\n\n"
+            "Проверьте, пожалуйста, что перевод прошёл, и нажмите кнопку ещё раз. "
+            "Если что-то не так — просто напишите нам."
+        )
+        note = "❌ Отмечено, что деньги не пришли. Клиента попросили проверить перевод."
+        client_kb = claim_kb(payment["id"])
+    try:
+        await bot.send_message(payment["user_id"], client_text, reply_markup=client_kb)
+    except Exception:
+        note += "\n⚠️ Но написать клиенту не удалось."
+    await callback.message.edit_text(f"{callback.message.html_text}\n\n<b>{note}</b>")
+    await callback.answer("Готово")
