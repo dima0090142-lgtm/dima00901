@@ -644,7 +644,7 @@ async def render_photo(callback: CallbackQuery, db: Database, cfg: Config, idx: 
 @router.callback_query(F.data.startswith("port:del:"))
 async def port_del(callback: CallbackQuery, db: Database, cfg: Config) -> None:
     _, _, photo_id, idx = callback.data.split(":")
-    photo = await db.fetchone("SELECT * FROM portfolio WHERE id = ?", int(photo_id))
+    photo = await db.get_portfolio(int(photo_id))
     if photo:
         await db.delete_portfolio(photo["id"])
         (cfg.uploads_dir / photo["filename"]).unlink(missing_ok=True)
@@ -682,7 +682,7 @@ async def replace_design_photo(db: Database, cfg: Config, key: str, filename: st
     if filename:
         await db.set_setting(key, filename)
     else:
-        await db.execute("DELETE FROM settings WHERE key = ?", key)
+        await db.delete_setting(key)
 
 
 @router.message(AdminStates.design_photo, F.photo)

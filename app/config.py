@@ -52,10 +52,8 @@ class Config:
     arrival_check_minutes: int
     telegram_proxy: str
     site_url: str
-
-    @property
-    def db_path(self) -> Path:
-        return self.data_dir / "bot.db"
+    database_url: str
+    default_master: str
 
     @property
     def uploads_dir(self) -> Path:
@@ -64,6 +62,12 @@ class Config:
     @classmethod
     def from_env(cls) -> "Config":
         token = os.getenv("BOT_TOKEN", "").strip()
+        database_url = os.getenv("DATABASE_URL", "").strip()
+        if not database_url:
+            raise RuntimeError(
+                "Не задан DATABASE_URL. Укажите адрес PostgreSQL, например "
+                "postgresql://user:password@host:5432/tattoo"
+            )
         if not token:
             # Печатаем только названия переменных (без значений), чтобы было видно опечатку
             names = sorted(k for k in os.environ if not k.startswith(("PYTHON", "LC_", "LANG", "GPG")))
@@ -84,4 +88,6 @@ class Config:
             arrival_check_minutes=int(os.getenv("ARRIVAL_CHECK_MINUTES", "30")),
             telegram_proxy=os.getenv("TELEGRAM_PROXY", "").strip(),
             site_url=os.getenv("SITE_URL", "https://tattookult.ru").strip(),
+            database_url=database_url,
+            default_master=os.getenv("DEFAULT_MASTER", "daria").strip().lower(),
         )

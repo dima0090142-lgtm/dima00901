@@ -42,11 +42,27 @@
    | `ADMIN_IDS` | ваш Telegram ID; несколько через запятую |
    | `CHANNEL_ID` | `@GameCubeVDK` (потом замените на основной канал) |
    | `DATA_DIR` | `/data` |
+   | `DATABASE_URL` | адрес базы PostgreSQL (см. ниже) |
+   | `DEFAULT_MASTER` | `daria` — на кого попадают заявки из бота |
    | `WEBAPP_URL` | заполните на шаге 4 |
 
 4. Во вкладке **«Домены»** включите бесплатный домен (вида `https://имя-проекта.amvera.io`). Скопируйте его в переменную `WEBAPP_URL` и перезапустите приложение.
 
-> База данных и фотографии хранятся в папке `/data`, поэтому при обновлениях они не теряются.
+> Фотографии хранятся в папке `/data`, поэтому при обновлениях они не теряются.
+
+### База данных PostgreSQL
+Бот, мини-приложение и админка сайта работают с **одной общей базой** PostgreSQL.
+1. В Amvera создайте управляемую базу PostgreSQL (раздел баз данных), имя базы — например `tattoo`.
+2. Скопируйте внутренний адрес, пользователя и пароль и соберите строку
+   `postgresql://ПОЛЬЗОВАТЕЛЬ:ПАРОЛЬ@АДРЕС:5432/tattoo` → переменная `DATABASE_URL` (как **секрет**).
+3. Таблицы создаются сами при первом запуске.
+
+**Перенос старых данных из SQLite (один раз).** Если бот уже работал на старой версии, его база лежит в `/data/bot.db`.
+Перенесите её командой (на пустую базу PostgreSQL):
+```bash
+DATABASE_URL=postgresql://... python scripts/import_sqlite.py /data/bot.db
+```
+Номера заявок, клиентов и ссылки-приглашения сохранятся. Повторный запуск ничего не задвоит — скрипт остановится.
 
 ### 3. Настройте мини-приложение в BotFather
 В [@BotFather](https://t.me/BotFather): `/mybots` → ваш бот → **Bot Settings** → **Configure Mini App** → **Enable Mini App** → укажите тот же адрес, что в `WEBAPP_URL`.
@@ -76,7 +92,7 @@ Amvera связана с GitHub через вебхук (событие **Push**
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # заполните BOT_TOKEN и ADMIN_IDS
+cp .env.example .env   # заполните BOT_TOKEN, ADMIN_IDS и DATABASE_URL
 python main.py
 ```
 Приложение откроется на http://localhost:8080. Отправить заявку можно только из Telegram: сервер проверяет подпись Telegram, это защита от спама.
@@ -94,7 +110,8 @@ tattoo.example.ru {
 ```
 main.py              — точка входа: бот + веб-сервер + напоминания
 app/config.py        — настройки из переменных окружения
-app/db.py            — база данных SQLite
+app/db.py            — база данных PostgreSQL (общая с сайтом)
+scripts/import_sqlite.py — перенос старой базы SQLite в PostgreSQL
 app/web.py           — API для мини-приложения (контент, приём заявок)
 app/handlers/user.py — /start и ответы клиентам
 app/handlers/admin.py— панель администратора

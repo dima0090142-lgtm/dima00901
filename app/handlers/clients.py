@@ -220,7 +220,7 @@ async def book_client(callback: CallbackQuery, db: Database, cfg: Config) -> Non
     c = await db.get_client(int(callback.data.split(":")[2]))
     # Служебная заявка: через неё работает тот же календарь, что и для обычных заявок
     app_id = await db.add_application(
-        c["user_id"] or 0, c["name"], format_phone(c["phone"]), "Запись через админку", c["id"], status="admin"
+        c["user_id"] or 0, c["name"], format_phone(c["phone"]), "Запись через админку", c["id"], status="admin", source="bot"
     )
     app = await db.get_application(app_id)
     now = datetime.now(cfg.tz)

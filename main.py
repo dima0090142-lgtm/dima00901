@@ -52,7 +52,7 @@ async def main() -> None:
     if not cfg.admin_ids:
         log.warning("ADMIN_IDS не задан — заявки некому присылать. Узнайте свой ID командой /myid")
 
-    db = Database(cfg.db_path)
+    db = Database(cfg.database_url, cfg.default_master)
     await db.connect()
 
     session = AiohttpSession(proxy=cfg.telegram_proxy) if cfg.telegram_proxy else None

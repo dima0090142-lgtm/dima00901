@@ -1,68 +1,106 @@
 import re
 import secrets
 import time
-from pathlib import Path
 from typing import Any
 
-import aiosqlite
+import asyncpg
 
+# Общая база студии: её используют бот, мини-приложение и админка сайта.
+# Время хранится в секундах Unix (BIGINT), как и раньше в SQLite.
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS masters (
+    id           SERIAL PRIMARY KEY,
+    slug         TEXT NOT NULL UNIQUE,              -- логин в админке сайта: daria, alexa, dima
+    name         TEXT NOT NULL,
+    role         TEXT NOT NULL DEFAULT 'master',    -- master | admin
+    telegram_id  BIGINT UNIQUE,
+    active       BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at   BIGINT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS users (
-    id          INTEGER PRIMARY KEY,
+    id          BIGINT PRIMARY KEY,                 -- Telegram ID
     first_name  TEXT,
     username    TEXT,
-    created_at  INTEGER NOT NULL,
-    blocked     INTEGER NOT NULL DEFAULT 0
+    created_at  BIGINT NOT NULL,
+    blocked     BOOLEAN NOT NULL DEFAULT FALSE
+);
+CREATE TABLE IF NOT EXISTS clients (
+    id           SERIAL PRIMARY KEY,
+    phone        TEXT NOT NULL UNIQUE,              -- только цифры, 7XXXXXXXXXX
+    name         TEXT NOT NULL,
+    user_id      BIGINT,                            -- Telegram ID, когда клиент подключился к боту
+    note         TEXT NOT NULL DEFAULT '',
+    invite_code  TEXT NOT NULL UNIQUE,
+    created_at   BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS applications (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id     INTEGER NOT NULL,
+    id          SERIAL PRIMARY KEY,
+    user_id     BIGINT NOT NULL,                    -- 0, если заявка не из Telegram
+    client_id   INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+    master_id   INTEGER REFERENCES masters(id) ON DELETE SET NULL,
     name        TEXT NOT NULL,
     phone       TEXT NOT NULL,
     idea        TEXT NOT NULL,
-    status      TEXT NOT NULL DEFAULT 'new',   -- new | contacted | scheduled | rejected
-    created_at  INTEGER NOT NULL
+    status      TEXT NOT NULL DEFAULT 'new',        -- new | contacted | scheduled | rejected | admin
+    source      TEXT NOT NULL DEFAULT 'miniapp',    -- miniapp | bot | site
+    created_at  BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS appointments (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    application_id  INTEGER,
-    user_id         INTEGER NOT NULL,
+    id              SERIAL PRIMARY KEY,
+    application_id  INTEGER REFERENCES applications(id) ON DELETE SET NULL,
+    client_id       INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+    master_id       INTEGER REFERENCES masters(id) ON DELETE SET NULL,
+    user_id         BIGINT NOT NULL DEFAULT 0,
     name            TEXT NOT NULL,
     phone           TEXT NOT NULL,
-    starts_at       INTEGER NOT NULL,
+    starts_at       BIGINT NOT NULL,
+    ends_at         BIGINT,
+    notes           TEXT NOT NULL DEFAULT '',
     status          TEXT NOT NULL DEFAULT 'scheduled',  -- scheduled | came | no_show | cancelled
-    reminded        INTEGER NOT NULL DEFAULT 0,
-    asked           INTEGER NOT NULL DEFAULT 0
+    source          TEXT NOT NULL DEFAULT 'bot',        -- bot | site
+    reminded        BOOLEAN NOT NULL DEFAULT FALSE,
+    asked           BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at      BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM now())::BIGINT
+);
+CREATE INDEX IF NOT EXISTS appointments_starts_idx ON appointments (starts_at);
+CREATE INDEX IF NOT EXISTS appointments_client_idx ON appointments (client_id);
+CREATE INDEX IF NOT EXISTS applications_user_idx ON applications (user_id, created_at);
+CREATE TABLE IF NOT EXISTS supplies (
+    id          SERIAL PRIMARY KEY,
+    name        TEXT NOT NULL,
+    category    TEXT NOT NULL,
+    quantity    NUMERIC NOT NULL DEFAULT 0,
+    unit        TEXT NOT NULL,
+    created_at  BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS faq (
-    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    id        SERIAL PRIMARY KEY,
     question  TEXT NOT NULL,
     answer    TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS promos (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    id          SERIAL PRIMARY KEY,
     text        TEXT NOT NULL,
-    created_at  INTEGER NOT NULL
+    created_at  BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS portfolio (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    id          SERIAL PRIMARY KEY,
     filename    TEXT NOT NULL,
-    created_at  INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS clients (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    phone        TEXT NOT NULL UNIQUE,   -- только цифры, 7XXXXXXXXXX
-    name         TEXT NOT NULL,
-    user_id      INTEGER,                -- Telegram ID, когда клиент подключился к боту
-    note         TEXT NOT NULL DEFAULT '',
-    invite_code  TEXT NOT NULL UNIQUE,
-    created_at   INTEGER NOT NULL
+    created_at  BIGINT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS settings (
     key    TEXT PRIMARY KEY,
     value  TEXT NOT NULL
 );
 """
+
+# Мастера студии (как на сайте). Первый — мастер по умолчанию для заявок из бота.
+DEFAULT_MASTERS = [
+    ("daria", "Дарья", "master"),
+    ("alexa", "Александра", "master"),
+    ("dima", "Дмитрий", "master"),
+    ("admin", "Администратор", "admin"),
+]
 
 DEFAULT_SETTINGS = {
     "about": (
@@ -109,7 +147,7 @@ DEFAULT_FAQ = [
 
 
 # Клиент «подключён», если нажал «Старт» в боте и не заблокировал его — только тогда бот может ему писать
-CLIENT_SELECT = """SELECT c.*, (u.id IS NOT NULL AND u.blocked = 0) AS started
+CLIENT_SELECT = """SELECT c.*, (u.id IS NOT NULL AND NOT u.blocked) AS started
                    FROM clients c LEFT JOIN users u ON u.id = c.user_id"""
 
 # Кому писать о сеансе: тому, кто оставил заявку, или клиенту, который подключился к боту позже
@@ -132,117 +170,131 @@ def format_phone(phone: str) -> str:
     return "+" + phone if phone else ""
 
 
+def _now() -> int:
+    return int(time.time())
+
+
 class Database:
-    def __init__(self, path: Path):
-        self.path = path
-        self.conn: aiosqlite.Connection | None = None
+    def __init__(self, dsn: str, default_master: str = "daria"):
+        self.dsn = dsn
+        self.default_master = default_master
+        self.pool: asyncpg.Pool | None = None
 
     async def connect(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = await aiosqlite.connect(self.path)
-        self.conn.row_factory = aiosqlite.Row
-        await self.conn.executescript(SCHEMA)
-        await self._add_column("applications", "client_id", "INTEGER")
-        await self._add_column("appointments", "client_id", "INTEGER")
-        for key, value in DEFAULT_SETTINGS.items():
-            await self.conn.execute(
-                "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value)
-            )
-        # FAQ заполняется примерами один раз — если админ их удалит, они не вернутся
-        if await self.get_setting("faq_seeded") is None:
-            for q, a in DEFAULT_FAQ:
-                await self.conn.execute("INSERT INTO faq (question, answer) VALUES (?, ?)", (q, a))
-            await self.conn.execute("INSERT INTO settings (key, value) VALUES ('faq_seeded', '1')")
-        await self.conn.commit()
-
-    async def _add_column(self, table: str, column: str, decl: str) -> None:
-        """Добавляет колонку в уже существующую базу (обновление без потери данных)."""
-        async with self.conn.execute(f"PRAGMA table_info({table})") as cur:
-            columns = {row[1] for row in await cur.fetchall()}
-        if column not in columns:
-            await self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        self.pool = await asyncpg.create_pool(self.dsn, min_size=1, max_size=5)
+        async with self.pool.acquire() as conn, conn.transaction():
+            # Блокировка, чтобы два процесса (бот и API сайта) не создавали схему одновременно
+            await conn.execute("SELECT pg_advisory_xact_lock(4242001)")
+            await conn.execute(SCHEMA)
+            for slug, name, role in DEFAULT_MASTERS:
+                await conn.execute(
+                    "INSERT INTO masters (slug, name, role, created_at) VALUES ($1, $2, $3, $4) "
+                    "ON CONFLICT (slug) DO NOTHING",
+                    slug, name, role, _now(),
+                )
+            for key, value in DEFAULT_SETTINGS.items():
+                await conn.execute(
+                    "INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING", key, value
+                )
+            # FAQ заполняется примерами один раз — если админ их удалит, они не вернутся
+            seeded = await conn.fetchval("SELECT value FROM settings WHERE key = 'faq_seeded'")
+            if seeded is None:
+                await conn.executemany(
+                    "INSERT INTO faq (question, answer) VALUES ($1, $2)", DEFAULT_FAQ
+                )
+                await conn.execute("INSERT INTO settings (key, value) VALUES ('faq_seeded', '1')")
 
     async def close(self) -> None:
-        if self.conn:
-            await self.conn.close()
+        if self.pool:
+            await self.pool.close()
 
     async def fetchall(self, sql: str, *args: Any) -> list[dict]:
-        async with self.conn.execute(sql, args) as cur:
-            return [dict(row) for row in await cur.fetchall()]
+        return [dict(r) for r in await self.pool.fetch(sql, *args)]
 
     async def fetchone(self, sql: str, *args: Any) -> dict | None:
-        async with self.conn.execute(sql, args) as cur:
-            row = await cur.fetchone()
-            return dict(row) if row else None
+        row = await self.pool.fetchrow(sql, *args)
+        return dict(row) if row else None
 
-    async def execute(self, sql: str, *args: Any) -> int:
-        cur = await self.conn.execute(sql, args)
-        await self.conn.commit()
-        return cur.lastrowid
+    async def fetchval(self, sql: str, *args: Any) -> Any:
+        return await self.pool.fetchval(sql, *args)
+
+    async def execute(self, sql: str, *args: Any) -> None:
+        await self.pool.execute(sql, *args)
+
+    # --- мастера ---
+
+    async def default_master_id(self) -> int | None:
+        return await self.fetchval("SELECT id FROM masters WHERE slug = $1", self.default_master)
+
+    async def list_masters(self) -> list[dict]:
+        return await self.fetchall("SELECT * FROM masters WHERE active ORDER BY id")
 
     # --- пользователи ---
 
     async def upsert_user(self, user_id: int, first_name: str | None, username: str | None) -> None:
         await self.execute(
-            """INSERT INTO users (id, first_name, username, created_at) VALUES (?, ?, ?, ?)
-               ON CONFLICT(id) DO UPDATE SET first_name = excluded.first_name,
-                                             username = excluded.username,
-                                             blocked = 0""",
-            user_id, first_name, username, int(time.time()),
+            """INSERT INTO users (id, first_name, username, created_at) VALUES ($1, $2, $3, $4)
+               ON CONFLICT (id) DO UPDATE SET first_name = EXCLUDED.first_name,
+                                              username = EXCLUDED.username,
+                                              blocked = FALSE""",
+            user_id, first_name, username, _now(),
         )
 
     async def active_user_ids(self) -> list[int]:
-        rows = await self.fetchall("SELECT id FROM users WHERE blocked = 0")
+        rows = await self.fetchall("SELECT id FROM users WHERE NOT blocked")
         return [r["id"] for r in rows]
 
     async def mark_blocked(self, user_id: int) -> None:
-        await self.execute("UPDATE users SET blocked = 1 WHERE id = ?", user_id)
+        await self.execute("UPDATE users SET blocked = TRUE WHERE id = $1", user_id)
 
     # --- заявки ---
 
     async def add_application(
-        self, user_id: int, name: str, phone: str, idea: str, client_id: int | None = None, status: str = "new"
+        self, user_id: int, name: str, phone: str, idea: str, client_id: int | None = None,
+        status: str = "new", master_id: int | None = None, source: str = "miniapp",
     ) -> int:
-        return await self.execute(
-            """INSERT INTO applications (user_id, name, phone, idea, created_at, client_id, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            user_id, name, phone, idea, int(time.time()), client_id, status,
+        if master_id is None:
+            master_id = await self.default_master_id()
+        return await self.fetchval(
+            """INSERT INTO applications (user_id, name, phone, idea, created_at, client_id, status, master_id, source)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id""",
+            user_id, name, phone, idea, _now(), client_id, status, master_id, source,
         )
 
     async def recent_applications_count(self, user_id: int, seconds: int) -> int:
-        row = await self.fetchone(
-            "SELECT COUNT(*) AS n FROM applications WHERE user_id = ? AND created_at > ?",
-            user_id, int(time.time()) - seconds,
+        return await self.fetchval(
+            "SELECT COUNT(*) FROM applications WHERE user_id = $1 AND created_at > $2",
+            user_id, _now() - seconds,
         )
-        return row["n"]
 
     async def get_application(self, app_id: int) -> dict | None:
-        return await self.fetchone("SELECT * FROM applications WHERE id = ?", app_id)
+        return await self.fetchone("SELECT * FROM applications WHERE id = $1", app_id)
 
     async def set_application_status(self, app_id: int, status: str) -> None:
-        await self.execute("UPDATE applications SET status = ? WHERE id = ?", status, app_id)
+        await self.execute("UPDATE applications SET status = $1 WHERE id = $2", status, app_id)
 
     async def open_applications(self, limit: int = 10) -> list[dict]:
         return await self.fetchall(
-            "SELECT * FROM applications WHERE status IN ('new', 'contacted') ORDER BY id DESC LIMIT ?",
+            "SELECT * FROM applications WHERE status IN ('new', 'contacted') ORDER BY id DESC LIMIT $1",
             limit,
         )
 
     # --- сеансы ---
 
     async def add_appointment(self, application: dict, starts_at: int, reminded: bool) -> int:
-        return await self.execute(
-            """INSERT INTO appointments (application_id, user_id, name, phone, starts_at, reminded, client_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        master_id = application.get("master_id") or await self.default_master_id()
+        return await self.fetchval(
+            """INSERT INTO appointments (application_id, user_id, name, phone, starts_at, reminded, client_id, master_id)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id""",
             application["id"], application["user_id"], application["name"],
-            application["phone"], starts_at, int(reminded), application.get("client_id"),
+            application["phone"], starts_at, reminded, application.get("client_id"), master_id,
         )
 
     async def get_appointment(self, appt_id: int) -> dict | None:
-        return await self.fetchone("SELECT * FROM appointments WHERE id = ?", appt_id)
+        return await self.fetchone("SELECT * FROM appointments WHERE id = $1", appt_id)
 
     async def set_appointment_status(self, appt_id: int, status: str) -> None:
-        await self.execute("UPDATE appointments SET status = ? WHERE id = ?", status, appt_id)
+        await self.execute("UPDATE appointments SET status = $1 WHERE id = $2", status, appt_id)
 
     async def upcoming_appointments(self) -> list[dict]:
         return await self.fetchall(
@@ -252,77 +304,79 @@ class Database:
     async def appointments_between(self, start: int, end: int) -> list[dict]:
         return await self.fetchall(
             """SELECT * FROM appointments
-               WHERE status IN ('scheduled', 'came') AND starts_at >= ? AND starts_at < ? ORDER BY starts_at""",
+               WHERE status IN ('scheduled', 'came') AND starts_at >= $1 AND starts_at < $2 ORDER BY starts_at""",
             start, end,
         )
 
     async def appointments_to_remind(self, now: int) -> list[dict]:
         return await self.fetchall(
             f"""SELECT a.*, {CHAT_ID} AS chat_id FROM appointments a LEFT JOIN clients c ON c.id = a.client_id
-               WHERE a.status = 'scheduled' AND a.reminded = 0 AND a.starts_at - 86400 <= ? AND a.starts_at > ?""",
-            now, now,
+               WHERE a.status = 'scheduled' AND NOT a.reminded AND a.starts_at - 86400 <= $1 AND a.starts_at > $1""",
+            now,
         )
 
     async def appointment_chat_id(self, appt_id: int) -> int | None:
-        row = await self.fetchone(
-            f"""SELECT {CHAT_ID} AS chat_id FROM appointments a LEFT JOIN clients c ON c.id = a.client_id
-               WHERE a.id = ?""",
+        return await self.fetchval(
+            f"""SELECT {CHAT_ID} FROM appointments a LEFT JOIN clients c ON c.id = a.client_id
+               WHERE a.id = $1""",
             appt_id,
         )
-        return row["chat_id"] if row else None
 
     async def appointments_to_ask(self, now: int, delay: int) -> list[dict]:
         return await self.fetchall(
-            "SELECT * FROM appointments WHERE status = 'scheduled' AND asked = 0 AND starts_at + ? <= ?",
+            "SELECT * FROM appointments WHERE status = 'scheduled' AND NOT asked AND starts_at + $1 <= $2",
             delay, now,
         )
 
     async def mark_reminded(self, appt_id: int) -> None:
-        await self.execute("UPDATE appointments SET reminded = 1 WHERE id = ?", appt_id)
+        await self.execute("UPDATE appointments SET reminded = TRUE WHERE id = $1", appt_id)
 
     async def mark_asked(self, appt_id: int) -> None:
-        await self.execute("UPDATE appointments SET asked = 1 WHERE id = ?", appt_id)
+        await self.execute("UPDATE appointments SET asked = TRUE WHERE id = $1", appt_id)
 
     # --- контент ---
 
     async def get_setting(self, key: str) -> str | None:
-        row = await self.fetchone("SELECT value FROM settings WHERE key = ?", key)
-        return row["value"] if row else None
+        return await self.fetchval("SELECT value FROM settings WHERE key = $1", key)
 
     async def set_setting(self, key: str, value: str) -> None:
         await self.execute(
-            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            "INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
             key, value,
         )
+
+    async def delete_setting(self, key: str) -> None:
+        await self.execute("DELETE FROM settings WHERE key = $1", key)
 
     async def list_faq(self) -> list[dict]:
         return await self.fetchall("SELECT * FROM faq ORDER BY id")
 
     async def add_faq(self, question: str, answer: str) -> None:
-        await self.execute("INSERT INTO faq (question, answer) VALUES (?, ?)", question, answer)
+        await self.execute("INSERT INTO faq (question, answer) VALUES ($1, $2)", question, answer)
 
     async def delete_faq(self, faq_id: int) -> None:
-        await self.execute("DELETE FROM faq WHERE id = ?", faq_id)
+        await self.execute("DELETE FROM faq WHERE id = $1", faq_id)
 
     async def list_promos(self) -> list[dict]:
         return await self.fetchall("SELECT * FROM promos ORDER BY id DESC")
 
     async def add_promo(self, text: str) -> None:
-        await self.execute("INSERT INTO promos (text, created_at) VALUES (?, ?)", text, int(time.time()))
+        await self.execute("INSERT INTO promos (text, created_at) VALUES ($1, $2)", text, _now())
 
     async def delete_promo(self, promo_id: int) -> None:
-        await self.execute("DELETE FROM promos WHERE id = ?", promo_id)
+        await self.execute("DELETE FROM promos WHERE id = $1", promo_id)
 
     async def list_portfolio(self) -> list[dict]:
         return await self.fetchall("SELECT * FROM portfolio ORDER BY id DESC")
 
+    async def get_portfolio(self, photo_id: int) -> dict | None:
+        return await self.fetchone("SELECT * FROM portfolio WHERE id = $1", photo_id)
+
     async def add_portfolio(self, filename: str) -> None:
-        await self.execute(
-            "INSERT INTO portfolio (filename, created_at) VALUES (?, ?)", filename, int(time.time())
-        )
+        await self.execute("INSERT INTO portfolio (filename, created_at) VALUES ($1, $2)", filename, _now())
 
     async def delete_portfolio(self, photo_id: int) -> None:
-        await self.execute("DELETE FROM portfolio WHERE id = ?", photo_id)
+        await self.execute("DELETE FROM portfolio WHERE id = $1", photo_id)
 
     # --- клиенты ---
 
@@ -331,27 +385,24 @@ class Database:
         norm = normalize_phone(phone)
         if len(norm) < 10:
             return None
-        client = await self.fetchone("SELECT * FROM clients WHERE phone = ?", norm)
-        if client is None:
-            await self.execute(
-                "INSERT INTO clients (phone, name, user_id, invite_code, created_at) VALUES (?, ?, ?, ?, ?)",
-                norm, name.strip()[:100] or "Без имени", user_id, secrets.token_hex(5), int(time.time()),
-            )
-        elif user_id and not client["user_id"]:
-            await self.execute("UPDATE clients SET user_id = ? WHERE id = ?", user_id, client["id"])
-        return await self.fetchone("SELECT * FROM clients WHERE phone = ?", norm)
+        return await self.fetchone(
+            """INSERT INTO clients (phone, name, user_id, invite_code, created_at) VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT (phone) DO UPDATE SET user_id = COALESCE(clients.user_id, EXCLUDED.user_id)
+               RETURNING *""",
+            norm, name.strip()[:100] or "Без имени", user_id or None, secrets.token_hex(5), _now(),
+        )
 
     async def get_client(self, client_id: int) -> dict | None:
-        return await self.fetchone(f"{CLIENT_SELECT} WHERE c.id = ?", client_id)
+        return await self.fetchone(f"{CLIENT_SELECT} WHERE c.id = $1", client_id)
 
     async def client_by_invite(self, code: str) -> dict | None:
-        return await self.fetchone("SELECT * FROM clients WHERE invite_code = ?", code)
+        return await self.fetchone("SELECT * FROM clients WHERE invite_code = $1", code)
 
     async def client_by_user(self, user_id: int) -> dict | None:
-        return await self.fetchone("SELECT * FROM clients WHERE user_id = ?", user_id)
+        return await self.fetchone("SELECT * FROM clients WHERE user_id = $1 LIMIT 1", user_id)
 
     async def link_client(self, client_id: int, user_id: int) -> None:
-        await self.execute("UPDATE clients SET user_id = ? WHERE id = ?", user_id, client_id)
+        await self.execute("UPDATE clients SET user_id = $1 WHERE id = $2", user_id, client_id)
 
     async def find_clients(self, query: str, limit: int = 10) -> list[dict]:
         digits = re.sub(r"\D", "", query)
@@ -359,35 +410,35 @@ class Database:
             if len(digits) >= 10:
                 digits = normalize_phone(digits)
             return await self.fetchall(
-                f"{CLIENT_SELECT} WHERE c.phone LIKE ? ORDER BY c.id DESC LIMIT ?", f"%{digits}%", limit
+                f"{CLIENT_SELECT} WHERE c.phone LIKE $1 ORDER BY c.id DESC LIMIT $2", f"%{digits}%", limit
             )
         return await self.fetchall(
-            f"{CLIENT_SELECT} WHERE c.name LIKE ? ORDER BY c.id DESC LIMIT ?", f"%{query.strip()}%", limit
+            f"{CLIENT_SELECT} WHERE c.name ILIKE $1 ORDER BY c.id DESC LIMIT $2", f"%{query.strip()}%", limit
         )
 
     async def list_clients(self, limit: int, offset: int) -> list[dict]:
-        return await self.fetchall(f"{CLIENT_SELECT} ORDER BY c.id DESC LIMIT ? OFFSET ?", limit, offset)
+        return await self.fetchall(f"{CLIENT_SELECT} ORDER BY c.id DESC LIMIT $1 OFFSET $2", limit, offset)
 
     async def count_clients(self) -> tuple[int, int]:
-        row = await self.fetchone(f"SELECT COUNT(*) AS total, COALESCE(SUM(started), 0) AS linked FROM ({CLIENT_SELECT})")
+        row = await self.fetchone(
+            f"SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE started) AS linked FROM ({CLIENT_SELECT}) t"
+        )
         return row["total"], row["linked"]
 
     async def set_client_note(self, client_id: int, note: str) -> None:
-        await self.execute("UPDATE clients SET note = ? WHERE id = ?", note, client_id)
+        await self.execute("UPDATE clients SET note = $1 WHERE id = $2", note, client_id)
 
     async def set_client_name(self, client_id: int, name: str) -> None:
-        await self.execute("UPDATE clients SET name = ? WHERE id = ?", name, client_id)
+        await self.execute("UPDATE clients SET name = $1 WHERE id = $2", name, client_id)
 
     async def delete_client(self, client_id: int) -> None:
-        await self.execute("UPDATE applications SET client_id = NULL WHERE client_id = ?", client_id)
-        await self.execute("UPDATE appointments SET client_id = NULL WHERE client_id = ?", client_id)
-        await self.execute("DELETE FROM clients WHERE id = ?", client_id)
+        # Заявки и сеансы остаются, ссылка на клиента обнуляется (ON DELETE SET NULL)
+        await self.execute("DELETE FROM clients WHERE id = $1", client_id)
 
     async def client_appointments(self, client_id: int) -> list[dict]:
         return await self.fetchall(
-            "SELECT * FROM appointments WHERE client_id = ? ORDER BY starts_at DESC LIMIT 10", client_id
+            "SELECT * FROM appointments WHERE client_id = $1 ORDER BY starts_at DESC LIMIT 10", client_id
         )
 
     async def client_applications_count(self, client_id: int) -> int:
-        row = await self.fetchone("SELECT COUNT(*) AS n FROM applications WHERE client_id = ?", client_id)
-        return row["n"]
+        return await self.fetchval("SELECT COUNT(*) FROM applications WHERE client_id = $1", client_id)
