@@ -48,7 +48,6 @@ class AdminStates(StatesGroup):
     faq_answer = State()
     port_photos = State()
     edit_text = State()
-    post_text = State()
     design_photo = State()
 
 
@@ -81,7 +80,7 @@ MENU_KB = kb(
 MARKETING_KB = kb(
     [btn("📣 Рассылка", "adm:bcast")],
     [btn("🔥 Акции", "adm:promos")],
-    [btn("📢 Пост в канал", "adm:post")],
+    [btn("📢 Канал", "ch:menu")],
     [btn("⬅️ В меню", "adm:menu")],
 )
 SETTINGS_KB = kb(
@@ -792,60 +791,6 @@ async def text_save(message: Message, state: FSMContext, db: Database) -> None:
     await db.set_setting(data["key"], text.strip()[:3000])
     await state.clear()
     await message.answer("✅ Сохранено. В приложении уже обновилось.", reply_markup=MENU_KB)
-
-
-# ---------- пост в канал ----------
-
-DEFAULT_POST = (
-    "<b>ТАТУ-КУЛЬТ</b>\n<i>Татуировка • Искусство • Культура</i>\n\n"
-    "Теперь записаться на консультацию можно прямо в Telegram — "
-    "нажмите кнопку ниже 👇"
-)
-
-
-@router.callback_query(F.data == "adm:post")
-async def post_start(callback: CallbackQuery, state: FSMContext, cfg: Config) -> None:
-    if not cfg.channel_id:
-        await show(callback, "Канал не настроен: укажите CHANNEL_ID в настройках сервера.", kb(MARKETING_BACK))
-        await callback.answer()
-        return
-    await state.set_state(AdminStates.post_text)
-    await show(
-        callback,
-        "Опубликую в канале пост с кнопкой «Записаться».\n\n"
-        "Пришлите текст поста или нажмите «Стандартный текст».",
-        kb([btn("📝 Стандартный текст", "post:default")], MARKETING_BACK),
-    )
-    await callback.answer()
-
-
-async def publish_post(bot: Bot, cfg: Config, text: str) -> str:
-    link = cfg.miniapp_link or f"https://t.me/{(await bot.me()).username}?startapp=channel"
-    markup = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="✍️ Записаться на тату", url=link)]]
-    )
-    try:
-        await bot.send_message(cfg.channel_id, text, reply_markup=markup)
-        return "✅ Пост опубликован в канале. Его можно закрепить."
-    except Exception as e:
-        log.exception("Не удалось опубликовать пост")
-        return (
-            "⚠️ Не получилось опубликовать пост. Проверьте, что бот добавлен в канал "
-            f"администратором с правом публикации.\n\nОшибка: <code>{escape(str(e))}</code>"
-        )
-
-
-@router.callback_query(AdminStates.post_text, F.data == "post:default")
-async def post_default(callback: CallbackQuery, state: FSMContext, bot: Bot, cfg: Config) -> None:
-    await state.clear()
-    await show(callback, await publish_post(bot, cfg, DEFAULT_POST), MENU_KB)
-    await callback.answer()
-
-
-@router.message(AdminStates.post_text, F.text)
-async def post_custom(message: Message, state: FSMContext, bot: Bot, cfg: Config) -> None:
-    await state.clear()
-    await message.answer(await publish_post(bot, cfg, message.html_text), reply_markup=MENU_KB)
 
 
 @router.message(StateFilter(None), F.text & ~F.text.startswith("/"))

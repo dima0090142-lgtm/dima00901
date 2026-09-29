@@ -68,6 +68,21 @@ CREATE TABLE IF NOT EXISTS payments (
     claimed_at  INTEGER,
     paid_at     INTEGER
 );
+CREATE TABLE IF NOT EXISTS posts (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    src_chat      INTEGER,                 -- откуда копировать пост (чат админа с ботом)
+    src_message   INTEGER,
+    kind          TEXT NOT NULL DEFAULT 'text',  -- text | photo | media
+    text          TEXT NOT NULL DEFAULT '',
+    photo_file_id TEXT,
+    ai_brief      TEXT,
+    with_button   INTEGER NOT NULL DEFAULT 1,
+    status        TEXT NOT NULL DEFAULT 'draft',  -- draft | scheduled | published | cancelled
+    source        TEXT NOT NULL DEFAULT 'bot',    -- bot | channel (опубликован в канале вручную)
+    publish_at    INTEGER,
+    published_at  INTEGER,
+    created_at    INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS settings (
     key    TEXT PRIMARY KEY,
     value  TEXT NOT NULL
@@ -438,3 +453,44 @@ class Database:
                WHERE p.user_id = ? AND p.status = 'claimed' AND p.claimed_at > ? ORDER BY p.id DESC""",
             user_id, int(time.time()) - within,
         )
+
+    # --- посты в канал ---
+
+    async def add_post(self, src_chat: int | None, src_message: int | None, kind: str = "text", text: str = "",
+                       photo_file_id: str | None = None, ai_brief: str | None = None,
+                       status: str = "draft", source: str = "bot") -> int:
+        now = int(time.time())
+        return await self.execute(
+            """INSERT INTO posts (src_chat, src_message, kind, text, photo_file_id, ai_brief, status, source,
+                                  published_at, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            src_chat, src_message, kind, text, photo_file_id, ai_brief, status, source,
+            now if status == "published" else None, now,
+        )
+
+    async def get_post(self, post_id: int) -> dict | None:
+        return await self.fetchone("SELECT * FROM posts WHERE id = ?", post_id)
+
+    async def update_post(self, post_id: int, **fields) -> None:
+        cols = ", ".join(f"{k} = ?" for k in fields)
+        await self.execute(f"UPDATE posts SET {cols} WHERE id = ?", *fields.values(), post_id)
+
+    async def due_posts(self, now: int) -> list[dict]:
+        return await self.fetchall(
+            "SELECT * FROM posts WHERE status = 'scheduled' AND publish_at <= ? ORDER BY publish_at", now
+        )
+
+    async def scheduled_posts(self) -> list[dict]:
+        return await self.fetchall("SELECT * FROM posts WHERE status = 'scheduled' ORDER BY publish_at LIMIT 20")
+
+    async def last_published_at(self) -> int | None:
+        row = await self.fetchone("SELECT MAX(published_at) AS t FROM posts WHERE status = 'published'")
+        return row["t"]
+
+    async def recent_post_texts(self, limit: int = 5) -> list[str]:
+        rows = await self.fetchall(
+            """SELECT text FROM posts WHERE status = 'published' AND text != ''
+               ORDER BY published_at DESC LIMIT ?""",
+            limit,
+        )
+        return [r["text"] for r in rows]
