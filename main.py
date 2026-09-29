@@ -60,7 +60,7 @@ async def main() -> None:
     bot = Bot(cfg.bot_token, session=session, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     ai = ContentAI(cfg, db)
     if not ai.enabled:
-        log.info("ANTHROPIC_API_KEY не задан — ИИ-помощник для канала выключен")
+        log.info("AI_BASE_URL / AI_API_KEY / AI_MODEL не заданы — ИИ-помощник для канала выключен")
     dp = Dispatcher(storage=MemoryStorage(), db=db, cfg=cfg, ai=ai)
     dp.include_router(channel.channel_watch)
     dp.include_router(channel.router)
