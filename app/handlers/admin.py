@@ -52,7 +52,14 @@ class AdminStates(StatesGroup):
     design_photo = State()
 
 
-TEXT_KEYS = {"about": "О салоне", "address": "Адрес", "contacts": "Контакты"}
+TEXT_KEYS = {
+    "about": "О салоне",
+    "address": "Адрес",
+    "contacts": "Контакты",
+    "aftercare": "Памятка после сеанса",
+}
+# Эти тексты уходят только в Telegram, поэтому в них сохраняем форматирование (жирный и т. п.)
+HTML_TEXT_KEYS = {"aftercare"}
 
 
 def btn(text: str, data: str) -> InlineKeyboardButton:
@@ -70,6 +77,7 @@ MENU_KB = kb(
     [btn("📣 Рассылка", "adm:bcast"), btn("🔥 Акции", "adm:promos")],
     [btn("❓ FAQ", "adm:faq"), btn("🖼 Фото", "adm:port")],
     [btn("✏️ Тексты", "adm:texts"), btn("📢 Пост в канал", "adm:post")],
+    [btn("👥 Клиенты", "cl:menu")],
 )
 MENU_TEXT = (
     "<b>Панель администратора</b>\n\nВыберите раздел. Отменить любое действие: /cancel\n\n"
@@ -324,14 +332,17 @@ async def book(bot: Bot, db: Database, cfg: Config, app: dict, dt: datetime) -> 
     """Создаёт сеанс, уведомляет клиента и возвращает текст для админа."""
     starts_at = int(dt.timestamp())
     # Если до сеанса меньше суток, отдельное напоминание не нужно — хватит подтверждения
-    await db.add_appointment(app, starts_at, reminded=starts_at - time.time() < 86400)
+    appt_id = await db.add_appointment(app, starts_at, reminded=starts_at - time.time() < 86400)
     await db.set_application_status(app["id"], "scheduled")
 
     when = fmt_dt(starts_at, cfg.tz)
     address = await db.get_setting("address") or ""
+    chat_id = await db.appointment_chat_id(appt_id)
     try:
+        if not chat_id:
+            raise TelegramBadRequest(method=None, message="клиент не подключён к боту")
         await bot.send_message(
-            app["user_id"],
+            chat_id,
             f"✅ <b>Вы записаны на сеанс!</b>\n\n"
             f"🗓 {when}\n📍 {escape(address)}\n👩‍🎨 Мастер: {escape(cfg.master_name)}\n\n"
             "Накануне пришлём напоминание. Если планы изменятся — пожалуйста, предупредите заранее.",
@@ -339,8 +350,9 @@ async def book(bot: Bot, db: Database, cfg: Config, app: dict, dt: datetime) -> 
         client_note = "Клиент получил уведомление в Telegram ✅"
     except (TelegramForbiddenError, TelegramBadRequest):
         client_note = (
-            "⚠️ Не удалось написать клиенту в Telegram (он не разрешил сообщения от бота). "
-            f"Сообщите ему сами: {escape(app['phone'])}"
+            "⚠️ Клиент не подключён к боту, сообщение не отправлено. "
+            f"Сообщите ему сами: {escape(app['phone'])}\n"
+            "Чтобы он получал напоминания — отправьте ему ссылку-приглашение из карточки в «👥 Клиенты»."
         )
     return f"📅 Сеанс назначен: <b>{escape(app['name'])}</b> — {when}\n{client_note}"
 
@@ -371,13 +383,31 @@ async def cancel_appt(callback: CallbackQuery, db: Database, cfg: Config) -> Non
 
 
 @router.callback_query(F.data.startswith("appt:came:") | F.data.startswith("appt:noshow:"))
-async def arrival(callback: CallbackQuery, db: Database) -> None:
+async def arrival(callback: CallbackQuery, db: Database, bot: Bot) -> None:
     _, action, appt_id = callback.data.split(":")
     came = action == "came"
     await db.set_appointment_status(int(appt_id), "came" if came else "no_show")
     note = "✅ Клиент пришёл" if came else "❌ Клиент не пришёл"
+    if came:
+        note += "\n" + await send_aftercare(bot, db, int(appt_id))
     await callback.message.edit_text(f"{callback.message.html_text}\n\n<b>{note}</b>")
     await callback.answer("Отмечено")
+
+
+async def send_aftercare(bot: Bot, db: Database, appt_id: int) -> str:
+    """Отправляет клиенту памятку после сеанса (текст — в «✏️ Тексты»)."""
+    text = await db.get_setting("aftercare")
+    if not text:
+        return "Памятка после сеанса не задана."
+    chat_id = await db.appointment_chat_id(appt_id)
+    if not chat_id:
+        return "📨 Памятку не отправить: клиент не подключён к боту."
+    try:
+        await bot.send_message(chat_id, text)
+        return "📨 Памятка по уходу отправлена клиенту."
+    except Exception:
+        log.warning("Не удалось отправить памятку клиенту %s", chat_id)
+        return "📨 Памятку отправить не удалось (клиент заблокировал бота)."
 
 
 # ---------- рассылка ----------
@@ -709,7 +739,8 @@ async def text_edit(callback: CallbackQuery, state: FSMContext, db: Database) ->
 @router.message(AdminStates.edit_text, F.text)
 async def text_save(message: Message, state: FSMContext, db: Database) -> None:
     data = await state.get_data()
-    await db.set_setting(data["key"], message.text.strip()[:3000])
+    text = message.html_text if data["key"] in HTML_TEXT_KEYS else message.text
+    await db.set_setting(data["key"], text.strip()[:3000])
     await state.clear()
     await message.answer("✅ Сохранено. В приложении уже обновилось.", reply_markup=MENU_KB)
 

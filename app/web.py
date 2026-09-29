@@ -41,6 +41,7 @@ def create_web_app(bot: Bot, db: Database, cfg: Config) -> web.Application:
         photos = await db.list_portfolio()
         return web.json_response({
             "master": cfg.master_name,
+            "site": cfg.site_url,
             "about": await db.get_setting("about") or "",
             "address": await db.get_setting("address") or "",
             "contacts": await db.get_setting("contacts") or "",
@@ -79,7 +80,8 @@ def create_web_app(bot: Bot, db: Database, cfg: Config) -> web.Application:
             )
 
         await db.upsert_user(user.id, user.first_name, user.username)
-        app_id = await db.add_application(user.id, name, phone, idea)
+        client = await db.upsert_client(phone, name, user.id)
+        app_id = await db.add_application(user.id, name, phone, idea, client["id"] if client else None)
         application = await db.get_application(app_id)
         for admin_id in cfg.admin_ids:
             try:
