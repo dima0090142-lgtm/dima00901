@@ -2,11 +2,12 @@ from html import escape
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
-from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from aiogram.types import CallbackQuery, KeyboardButton, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
 
 from ..common import booking_kb
 from ..config import Config
 from ..db import Database, format_phone
+from ..payments import admin_check_kb, admin_check_text, ref
 
 router = Router()
 
@@ -88,6 +89,50 @@ async def shared_contact(message: Message, db: Database, cfg: Config, bot: Bot) 
         await notify_admins(
             bot, cfg, f"📱 <b>{escape(client['name'])}</b> ({format_phone(client['phone'])}) поделился номером в боте."
         )
+
+
+@router.callback_query(F.data.startswith("pay:claim:"))
+async def payment_claim(callback: CallbackQuery, db: Database, cfg: Config, bot: Bot) -> None:
+    """Клиент нажал «Я оплатил» — просим админа проверить поступление."""
+    payment = await db.get_payment(int(callback.data.split(":")[2]))
+    if payment is None or payment["user_id"] != callback.from_user.id:
+        await callback.answer()
+        return
+    if payment["status"] == "paid":
+        await callback.answer("Эта предоплата уже подтверждена ✅", show_alert=True)
+        return
+    if payment["status"] == "cancelled":
+        await callback.answer("Этот запрос на оплату отменён", show_alert=True)
+        return
+    if payment["status"] == "pending":
+        await db.set_payment_status(payment["id"], "claimed")
+        for admin_id in cfg.admin_ids:
+            try:
+                await bot.send_message(admin_id, admin_check_text(payment), reply_markup=admin_check_kb(payment["id"]))
+            except Exception:
+                pass
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer(
+        "Спасибо! 🙏 Проверим поступление и сразу сообщим.\n\n"
+        "Если хотите, пришлите сюда скриншот чека — так проверим быстрее."
+    )
+    await callback.answer()
+
+
+@router.message(F.chat.type == "private", F.photo | F.document)
+async def payment_receipt(message: Message, db: Database, cfg: Config, bot: Bot) -> None:
+    """Скриншот чека после «Я оплатил» пересылаем админам."""
+    payment = await db.last_claimed_payment(message.from_user.id, within=24 * 3600)
+    if payment is None:
+        await fallback(message, cfg)
+        return
+    for admin_id in cfg.admin_ids:
+        try:
+            await bot.send_message(admin_id, f"🧾 Чек от <b>{escape(payment['name'])}</b> по оплате {ref(payment['id'])}:")
+            await bot.copy_message(admin_id, message.chat.id, message.message_id)
+        except Exception:
+            pass
+    await message.answer("Чек получили, спасибо! Скоро подтвердим оплату.")
 
 
 @router.message(Command("myid"))

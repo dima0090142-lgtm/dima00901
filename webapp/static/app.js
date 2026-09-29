@@ -24,23 +24,12 @@
   function go(screen) {
     if (screen === state.current) return;
     document.querySelectorAll(".screen").forEach((el) => el.classList.toggle("active", el.id === screen));
-    document.querySelectorAll(".pill, .tab").forEach((el) => el.classList.toggle("active", el.dataset.go === screen));
+    document.querySelectorAll(".pill").forEach((el) => el.classList.toggle("active", el.dataset.go === screen));
     state.current = screen;
     window.scrollTo(0, 0);
     if (tg) screen === "home" ? tg.BackButton.hide() : tg.BackButton.show();
     haptic();
   }
-
-  // ---------- оформление: классика / Liquid Glass ----------
-
-  const root = document.documentElement;
-  if (root.dataset.theme !== "glass") root.dataset.theme = "classic";
-  document.getElementById("theme-btn").addEventListener("click", () => {
-    const next = root.dataset.theme === "glass" ? "classic" : "glass";
-    root.dataset.theme = next;
-    try { localStorage.setItem("theme", next); } catch (_) {}
-    haptic("medium");
-  });
 
   document.addEventListener("click", (e) => {
     const target = e.target.closest("[data-go]");
@@ -107,7 +96,7 @@
 
     const recent = $("#recent");
     recent.replaceChildren();
-    c.portfolio.slice(0, 8).forEach((src, i) => {
+    c.portfolio.forEach((src, i) => {
       const img = el("img");
       img.loading = "lazy";
       img.alt = "Работа мастера";
@@ -128,18 +117,6 @@
     });
     $("#promos-block").hidden = c.promos.length === 0;
 
-    const gallery = $("#gallery");
-    gallery.replaceChildren();
-    c.portfolio.forEach((src, i) => {
-      const img = el("img");
-      img.loading = "lazy";
-      img.alt = "Работа мастера";
-      img.style.transitionDelay = `${Math.min(i, 8) * 60}ms`;
-      loadImg(img, src);
-      img.addEventListener("click", () => openLightbox(i));
-      gallery.append(img);
-    });
-    $("#gallery-empty").hidden = c.portfolio.length > 0;
 
     const masterPhoto = $("#master-photo");
     if (c.master_photo) {

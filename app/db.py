@@ -58,6 +58,16 @@ CREATE TABLE IF NOT EXISTS clients (
     invite_code  TEXT NOT NULL UNIQUE,
     created_at   INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS payments (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id   INTEGER NOT NULL,
+    user_id     INTEGER NOT NULL,
+    amount      INTEGER NOT NULL,             -- рубли
+    status      TEXT NOT NULL DEFAULT 'pending',  -- pending | claimed | paid | cancelled
+    created_at  INTEGER NOT NULL,
+    claimed_at  INTEGER,
+    paid_at     INTEGER
+);
 CREATE TABLE IF NOT EXISTS settings (
     key    TEXT PRIMARY KEY,
     value  TEXT NOT NULL
@@ -391,3 +401,40 @@ class Database:
     async def client_applications_count(self, client_id: int) -> int:
         row = await self.fetchone("SELECT COUNT(*) AS n FROM applications WHERE client_id = ?", client_id)
         return row["n"]
+
+    # --- предоплаты ---
+
+    async def add_payment(self, client_id: int, user_id: int, amount: int) -> int:
+        return await self.execute(
+            "INSERT INTO payments (client_id, user_id, amount, created_at) VALUES (?, ?, ?, ?)",
+            client_id, user_id, amount, int(time.time()),
+        )
+
+    async def get_payment(self, payment_id: int) -> dict | None:
+        return await self.fetchone(
+            """SELECT p.*, c.name, c.phone FROM payments p JOIN clients c ON c.id = p.client_id
+               WHERE p.id = ?""",
+            payment_id,
+        )
+
+    async def set_payment_status(self, payment_id: int, status: str) -> None:
+        column = {"claimed": "claimed_at", "paid": "paid_at"}.get(status)
+        if column:
+            await self.execute(
+                f"UPDATE payments SET status = ?, {column} = ? WHERE id = ?", status, int(time.time()), payment_id
+            )
+        else:
+            await self.execute("UPDATE payments SET status = ? WHERE id = ?", status, payment_id)
+
+    async def client_payments(self, client_id: int) -> list[dict]:
+        return await self.fetchall(
+            "SELECT * FROM payments WHERE client_id = ? AND status != 'cancelled' ORDER BY id DESC LIMIT 5",
+            client_id,
+        )
+
+    async def last_claimed_payment(self, user_id: int, within: int) -> dict | None:
+        return await self.fetchone(
+            """SELECT p.*, c.name, c.phone FROM payments p JOIN clients c ON c.id = p.client_id
+               WHERE p.user_id = ? AND p.status = 'claimed' AND p.claimed_at > ? ORDER BY p.id DESC""",
+            user_id, int(time.time()) - within,
+        )

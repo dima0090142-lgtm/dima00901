@@ -13,7 +13,6 @@ from .db import Database
 log = logging.getLogger(__name__)
 
 MAX_APPS_PER_HOUR = 3
-THEMES = {"classic", "glass"}
 INIT_DATA_TTL = 24 * 3600
 
 
@@ -28,11 +27,8 @@ def create_web_app(bot: Bot, db: Database, cfg: Config) -> web.Application:
     index_html = (WEBAPP_DIR / "index.html").read_text(encoding="utf-8").replace("__V__", version)
 
     async def index(request: web.Request) -> web.Response:
-        theme = await db.get_setting("theme")
         return web.Response(
-            text=index_html.replace("__THEME__", theme if theme in THEMES else "classic"),
-            content_type="text/html",
-            headers={"Cache-Control": "no-cache"},
+            text=index_html, content_type="text/html", headers={"Cache-Control": "no-cache"}
         )
 
     async def photo_url(key: str) -> str:
