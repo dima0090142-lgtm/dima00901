@@ -169,6 +169,8 @@ class Database:
         await self.conn.executescript(SCHEMA)
         await self._add_column("applications", "client_id", "INTEGER")
         await self._add_column("appointments", "client_id", "INTEGER")
+        await self._add_column("applications", "details", "TEXT NOT NULL DEFAULT ''")
+        await self._add_column("applications", "ref_photo", "TEXT")
         for key, value in DEFAULT_SETTINGS.items():
             await self.conn.execute(
                 "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value)
@@ -226,12 +228,13 @@ class Database:
     # --- заявки ---
 
     async def add_application(
-        self, user_id: int, name: str, phone: str, idea: str, client_id: int | None = None, status: str = "new"
+        self, user_id: int, name: str, phone: str, idea: str, client_id: int | None = None, status: str = "new",
+        details: str = "", ref_photo: str | None = None,
     ) -> int:
         return await self.execute(
-            """INSERT INTO applications (user_id, name, phone, idea, created_at, client_id, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            user_id, name, phone, idea, int(time.time()), client_id, status,
+            """INSERT INTO applications (user_id, name, phone, idea, created_at, client_id, status, details, ref_photo)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            user_id, name, phone, idea, int(time.time()), client_id, status, details, ref_photo,
         )
 
     async def recent_applications_count(self, user_id: int, seconds: int) -> int:
@@ -494,3 +497,23 @@ class Database:
             limit,
         )
         return [r["text"] for r in rows]
+
+    # --- «Мои записи» в мини-приложении ---
+
+    async def user_appointments(self, user_id: int, client_id: int | None) -> list[dict]:
+        return await self.fetchall(
+            """SELECT * FROM appointments WHERE (user_id = ? OR (client_id IS NOT NULL AND client_id = ?))
+               AND status != 'cancelled' ORDER BY starts_at DESC LIMIT 20""",
+            user_id, client_id or -1,
+        )
+
+    async def user_open_applications(self, user_id: int) -> list[dict]:
+        return await self.fetchall(
+            "SELECT * FROM applications WHERE user_id = ? AND status IN ('new', 'contacted') ORDER BY id DESC LIMIT 3",
+            user_id,
+        )
+
+    async def user_payments(self, user_id: int) -> list[dict]:
+        return await self.fetchall(
+            "SELECT * FROM payments WHERE user_id = ? AND status != 'cancelled' ORDER BY id DESC LIMIT 3", user_id
+        )

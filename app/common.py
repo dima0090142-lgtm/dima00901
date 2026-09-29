@@ -50,8 +50,11 @@ def application_text(app: dict, tz: ZoneInfo) -> str:
         f"🕒 {created:%d.%m.%Y %H:%M}\n\n"
         f"👤 <b>Имя:</b> {escape(app['name'])}\n"
         f"📱 <b>Телефон:</b> {escape(app['phone'])}\n"
-        f"💬 <b>Идея:</b> {escape(app['idea']) or '—'}\n\n"
-        f'<a href="tg://user?id={app["user_id"]}">Написать клиенту в Telegram</a>'
+        f"💬 <b>Идея:</b> {escape(app['idea']) or '—'}\n"
+        + (f"📋 {escape(app['details'])}\n" if app.get("details") else "")
+        + ("📎 Референс — фото ниже\n" if app.get("ref_photo") else "")
+        + "\n"
+        + f'<a href="tg://user?id={app["user_id"]}">Написать клиенту в Telegram</a>'
     )
 
 
