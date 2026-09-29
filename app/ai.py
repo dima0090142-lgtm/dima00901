@@ -1,22 +1,21 @@
-"""ИИ-помощник для канала: пишет тексты постов и предлагает идеи (Claude API).
+"""ИИ-помощник для канала: пишет тексты постов и предлагает идеи.
 
-Работает, только если задан ANTHROPIC_API_KEY. Без ключа бот обходится банком готовых идей.
+Работает через любой OpenAI-совместимый AI-шлюз (например, NordRouter): нужны адрес API, ключ и модель.
+Без них бот обходится банком готовых идей.
 """
 import base64
 import logging
 import random
 from datetime import datetime
 
-import anthropic
+import aiohttp
 
 from .config import Config
 from .db import Database
 
 log = logging.getLogger(__name__)
 
-# Отдельный запасной путь на случай отказа модели по соображениям безопасности:
-# сервер сам перезапустит запрос на рекомендуемой модели (fallbacks="default").
-FALLBACK_BETA = "server-side-fallback-2026-07-01"
+TIMEOUT = aiohttp.ClientTimeout(total=120)
 
 STYLE = """Ты — SMM-помощник тату-студии «Тату-Культ» (Владивосток). Пишешь посты для Telegram-канала студии.
 
@@ -32,16 +31,20 @@ STYLE = """Ты — SMM-помощник тату-студии «Тату-Кул
 class AIError(Exception):
     """Понятная админу причина, почему ИИ не ответил."""
 
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
+
 
 class ContentAI:
     def __init__(self, cfg: Config, db: Database):
         self.cfg = cfg
         self.db = db
-        self.client = anthropic.AsyncAnthropic(api_key=cfg.anthropic_api_key) if cfg.anthropic_api_key else None
+        self.url = cfg.ai_base_url.rstrip("/") + "/chat/completions" if cfg.ai_base_url else ""
 
     @property
     def enabled(self) -> bool:
-        return self.client is not None
+        return bool(self.url and self.cfg.ai_api_key and self.cfg.ai_model)
 
     async def _context(self) -> str:
         """Сведения о студии и последние посты — чтобы ИИ писал в том же духе и не повторялся."""
@@ -61,45 +64,70 @@ class ContentAI:
             parts.append("Последние посты канала (не повторяйся):\n" + "\n---\n".join(r[:400] for r in recent))
         return "\n\n".join(parts)
 
-    async def _ask(self, content: list[dict]) -> str:
-        if not self.client:
-            raise AIError("ИИ не подключён: добавьте ANTHROPIC_API_KEY в настройках сервера.")
+    async def _request(self, content: list[dict]) -> str:
+        payload = {
+            "model": self.cfg.ai_model,
+            "messages": [{"role": "system", "content": STYLE}, {"role": "user", "content": content}],
+            "max_tokens": 2000,
+        }
+        headers = {"Authorization": f"Bearer {self.cfg.ai_api_key}"}
         try:
-            response = await self.client.beta.messages.create(
-                model=self.cfg.ai_model,
-                max_tokens=16000,
-                betas=[FALLBACK_BETA],
-                fallbacks="default",
-                output_config={"effort": "medium"},
-                system=STYLE,
-                messages=[{"role": "user", "content": content}],
-            )
-        except anthropic.AuthenticationError:
-            raise AIError("Ключ ANTHROPIC_API_KEY не подходит — проверьте его.")
-        except anthropic.PermissionDeniedError:
-            raise AIError("Доступ к API запрещён для этого ключа или региона сервера.")
-        except anthropic.RateLimitError:
-            raise AIError("Слишком много запросов к ИИ — попробуйте через минуту.")
-        except anthropic.APIConnectionError:
-            raise AIError("Сервер не может подключиться к API ИИ.")
-        except anthropic.APIStatusError as e:
-            log.warning("Claude API error %s: %s", e.status_code, e.message)
-            raise AIError("ИИ временно недоступен — попробуйте позже.")
+            # trust_env — чтобы учитывались HTTPS_PROXY и подобные настройки сервера, если они есть
+            async with aiohttp.ClientSession(timeout=TIMEOUT, trust_env=True) as session:
+                async with session.post(self.url, json=payload, headers=headers) as resp:
+                    body = await resp.json(content_type=None)
+                    status = resp.status
+        except (aiohttp.ClientError, TimeoutError) as e:
+            log.warning("AI gateway connection error: %s", e)
+            raise AIError("Не удалось подключиться к AI-шлюзу — проверьте AI_BASE_URL.")
+        except ValueError:
+            raise AIError("AI-шлюз вернул непонятный ответ — проверьте AI_BASE_URL.")
 
-        if response.stop_reason == "refusal":
-            raise AIError("ИИ отказался писать этот текст. Попробуйте описать пост по-другому.")
-        text = "\n".join(b.text for b in response.content if b.type == "text").strip()
+        if status != 200:
+            detail = ""
+            if isinstance(body, dict):
+                err = body.get("error")
+                detail = (err.get("message") if isinstance(err, dict) else err) or body.get("message") or ""
+            log.warning("AI gateway error %s: %s", status, detail)
+            raise AIError({
+                400: f"Шлюз отклонил запрос: {detail or 'проверьте AI_MODEL'}",
+                401: "Ключ AI_API_KEY не подходит — проверьте его.",
+                402: "На балансе AI-шлюза закончились средства.",
+                403: "Доступ запрещён для этого ключа или модели.",
+                404: "Модель или адрес не найдены — проверьте AI_MODEL и AI_BASE_URL.",
+                429: "Слишком много запросов к ИИ — попробуйте через минуту.",
+            }.get(status, "ИИ временно недоступен — попробуйте позже."), status)
+
+        try:
+            message = body["choices"][0]["message"]
+        except (KeyError, IndexError, TypeError):
+            raise AIError("AI-шлюз вернул ответ в неожиданном формате.")
+        text = message.get("content") or ""
+        if isinstance(text, list):  # некоторые шлюзы отдают список частей
+            text = "".join(part.get("text", "") for part in text if isinstance(part, dict))
+        text = text.strip()
         if not text:
             raise AIError("ИИ вернул пустой ответ — попробуйте ещё раз.")
         return text
+
+    async def _ask(self, content: list[dict]) -> str:
+        if not self.enabled:
+            raise AIError("ИИ не подключён: задайте AI_BASE_URL, AI_API_KEY и AI_MODEL в настройках сервера.")
+        try:
+            return await self._request(content)
+        except AIError as e:
+            # Не все модели понимают картинки — тогда пробуем ещё раз только с текстом
+            if e.status != 400 or not any(part.get("type") == "image_url" for part in content):
+                raise
+            log.info("Модель не приняла фото, повторяю запрос без него")
+            return await self._request([part for part in content if part.get("type") != "image_url"])
 
     async def write_post(self, brief: str, photo: bytes | None = None) -> str:
         content: list[dict] = []
         if photo:
             content.append({
-                "type": "image",
-                "source": {"type": "base64", "media_type": "image/jpeg",
-                           "data": base64.standard_b64encode(photo).decode()},
+                "type": "image_url",
+                "image_url": {"url": "data:image/jpeg;base64," + base64.standard_b64encode(photo).decode()},
             })
         task = "Напиши пост для канала."
         if photo:

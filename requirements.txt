@@ -2,4 +2,3 @@ aiogram>=3.13,<4
 aiosqlite>=0.20
 python-dotenv>=1.0
 tzdata
-anthropic>=1.9,<2

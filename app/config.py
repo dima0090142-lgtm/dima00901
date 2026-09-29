@@ -52,7 +52,8 @@ class Config:
     arrival_check_minutes: int
     telegram_proxy: str
     site_url: str
-    anthropic_api_key: str
+    ai_base_url: str
+    ai_api_key: str
     ai_model: str
 
     @property
@@ -86,6 +87,7 @@ class Config:
             arrival_check_minutes=int(os.getenv("ARRIVAL_CHECK_MINUTES", "30")),
             telegram_proxy=os.getenv("TELEGRAM_PROXY", "").strip(),
             site_url=os.getenv("SITE_URL", "https://tattookult.ru").strip(),
-            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", "").strip(),
-            ai_model=os.getenv("AI_MODEL", "claude-opus-5-5").strip(),
+            ai_base_url=os.getenv("AI_BASE_URL", "").strip(),
+            ai_api_key=os.getenv("AI_API_KEY", "").strip(),
+            ai_model=os.getenv("AI_MODEL", "").strip(),
         )
