@@ -186,6 +186,8 @@ async def card(db: Database, cfg: Config, bot: Bot, client_id: int) -> tuple[str
     else:
         rows.append([btn("🔗 Ссылка-приглашение", f"cl:inv:{client_id}")])
     rows.append([btn("💳 Предоплата", f"cl:pay:{client_id}")])
+    if c["user_id"]:
+        rows.append([btn("🔓 Отвязать Telegram", f"cl:unlink:{client_id}")])
     rows.append([btn("📝 Заметка", f"cl:note:{client_id}"), btn("✏️ Имя", f"cl:rename:{client_id}")])
     rows.append([btn("🗑 Удалить", f"cl:del:{client_id}")])
     rows.append(CLIENTS_BACK)
@@ -385,3 +387,25 @@ async def pay_decision(callback: CallbackQuery, db: Database, bot: Bot) -> None:
         note += "\n⚠️ Но написать клиенту не удалось."
     await callback.message.edit_text(f"{callback.message.html_text}\n\n<b>{note}</b>")
     await callback.answer("Готово")
+
+
+@router.callback_query(F.data.startswith("cl:unlink:"))
+async def unlink_ask(callback: CallbackQuery, db: Database) -> None:
+    client_id = int(callback.data.split(":")[2])
+    c = await db.get_client(client_id)
+    await show(
+        callback,
+        f"Отвязать Telegram от карточки <b>{escape(c['name'])}</b>?\n\n"
+        "Бот перестанет писать этому аккаунту от имени карточки. Потом можно снова отправить клиенту "
+        "ссылку-приглашение.",
+        kb([btn("🔓 Да, отвязать", f"cl:unlinkok:{client_id}"), btn("Отмена", f"cl:c:{client_id}")]),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("cl:unlinkok:"))
+async def unlink_ok(callback: CallbackQuery, state: FSMContext, db: Database, cfg: Config, bot: Bot) -> None:
+    client_id = int(callback.data.split(":")[2])
+    await db.link_client(client_id, None)
+    await callback.answer("Telegram отвязан")
+    await open_card(callback.model_copy(update={"data": f"cl:c:{client_id}"}), state, db, cfg, bot)

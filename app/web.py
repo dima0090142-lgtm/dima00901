@@ -117,6 +117,7 @@ def create_web_app(bot: Bot, db: Database, cfg: Config) -> web.Application:
             "bot": await bot_username(),
             "about": await db.get_setting("about") or "",
             "address": await db.get_setting("address") or "",
+            "map_url": await db.get_setting("map_url") or "",
             "contacts": await db.get_setting("contacts") or "",
             "faq": [{"q": f["question"], "a": f["answer"]} for f in faq],
             "promos": [p["text"] for p in promos],
