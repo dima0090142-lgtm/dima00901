@@ -10,9 +10,10 @@ from aiogram.types import BotCommand, BotCommandScopeChat, MenuButtonWebApp, Web
 from aiohttp import web
 
 from app import VERSION
+from app.ai import ContentAI
 from app.config import Config
 from app.db import Database
-from app.handlers import admin, clients, user
+from app.handlers import admin, channel, clients, user
 from app.reminders import reminder_loop
 from app.web import create_web_app
 
@@ -57,7 +58,12 @@ async def main() -> None:
 
     session = AiohttpSession(proxy=cfg.telegram_proxy) if cfg.telegram_proxy else None
     bot = Bot(cfg.bot_token, session=session, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    dp = Dispatcher(storage=MemoryStorage(), db=db, cfg=cfg)
+    ai = ContentAI(cfg, db)
+    if not ai.enabled:
+        log.info("ANTHROPIC_API_KEY не задан — ИИ-помощник для канала выключен")
+    dp = Dispatcher(storage=MemoryStorage(), db=db, cfg=cfg, ai=ai)
+    dp.include_router(channel.channel_watch)
+    dp.include_router(channel.router)
     dp.include_router(clients.router)
     dp.include_router(admin.router)
     dp.include_router(user.router)
@@ -68,7 +74,7 @@ async def main() -> None:
     log.info("Мини-приложение доступно на порту %s", cfg.port)
 
     await setup_bot_ui(bot, cfg)
-    reminders = asyncio.create_task(reminder_loop(bot, db, cfg))
+    reminders = asyncio.create_task(reminder_loop(bot, db, cfg, ai))
     try:
         await dp.start_polling(bot)
     finally:

@@ -6,20 +6,27 @@ from html import escape
 from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from .ai import ContentAI
 from .common import fmt_dt
 from .config import Config
 from .db import Database
+from .handlers.channel import publish_due, reminder_tick
 
 log = logging.getLogger(__name__)
 
 
-async def reminder_loop(bot: Bot, db: Database, cfg: Config) -> None:
+async def reminder_loop(bot: Bot, db: Database, cfg: Config, ai: ContentAI) -> None:
     """Раз в минуту: напоминает клиентам о сеансе за сутки и спрашивает админа, пришёл ли клиент."""
     while True:
         try:
             await tick(bot, db, cfg)
         except Exception:
             log.exception("Ошибка в цикле напоминаний")
+        try:
+            await publish_due(bot, db, cfg)
+            await reminder_tick(bot, db, cfg, ai)
+        except Exception:
+            log.exception("Ошибка в задачах канала")
         await asyncio.sleep(60)
 
 
