@@ -167,10 +167,17 @@
     if (c.map_url) return openLink(c.map_url);
     openLink("https://yandex.ru/maps/?text=" + encodeURIComponent(c.address || "Владивосток, Светланская ул., 23"));
   }
-  function openChat() {
-    const bot = state.content && state.content.bot;
-    if (!bot) return;
-    const url = `https://t.me/${bot}`;
+  // Чат с мастером: открываем личку и подставляем начало сообщения — клиенту остаётся дописать и отправить
+  function greeting() {
+    const master = state.content && state.content.master;
+    return `Здравствуйте${master ? ", " + master : ""}!`;
+  }
+  function openChat(draft) {
+    const c = state.content || {};
+    const user = c.master_chat || c.bot;
+    if (!user) return;
+    const text = draft || `${greeting()} У меня вопрос по татуировке: `;
+    const url = `https://t.me/${user}?text=${encodeURIComponent(text)}`;
     if (tg && tg.openTelegramLink) tg.openTelegramLink(url); else openLink(url);
   }
 
@@ -183,7 +190,7 @@
       openMap();
     } else if (e.target.closest(".chat-btn")) {
       haptic();
-      openChat();
+      openChat(e.target.closest(".chat-btn").dataset.draft);
     }
   });
 
@@ -218,6 +225,7 @@
     const actions = el("div", "session-actions");
     const map = el("button", "chip-btn map-btn", "📍 Как добраться");
     const chat = el("button", "chip-btn chat-btn", "💬 Написать");
+    chat.dataset.draft = `${greeting()} Я записан(а) на сеанс ${s.day} ${s.month} в ${s.time}. Вопрос: `;
     actions.append(map, chat);
     body.append(actions);
     card.append(date, body);

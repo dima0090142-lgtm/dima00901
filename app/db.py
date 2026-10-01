@@ -97,6 +97,7 @@ DEFAULT_SETTINGS = {
     ),
     "address": "Владивосток, Светланская ул., 23, стр. 2, этаж 3",
     "map_url": "https://yandex.ru/maps/org/tattoo_kult/59781186856/",
+    "master_chat": "@MasterBoli_VDK",
     "contacts": "Запись и вопросы — через это приложение или в личные сообщения Telegram.",
     "aftercare": (
         "Спасибо, что выбрали Тату-Культ! 🖤\n\n"
