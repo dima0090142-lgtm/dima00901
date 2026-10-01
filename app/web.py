@@ -8,13 +8,13 @@ import uuid
 from datetime import datetime
 
 from aiogram import Bot
-from aiogram.types import FSInputFile
+from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.web_app import WebAppInitData, safe_parse_webapp_init_data
 from aiohttp import web
 
 from .common import MONTHS, WEEKDAYS, application_kb, application_text, fmt_dt
 from .config import WEBAPP_DIR, Config
-from .db import Database
+from .db import Database, format_phone
 from .payments import rub
 
 log = logging.getLogger(__name__)
@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 MAX_APPS_PER_HOUR = 3
 INIT_DATA_TTL = 24 * 3600
 MAX_PHOTO_BYTES = 6 * 1024 * 1024
+CHAT_NOTIFY_PAUSE = 10 * 60  # не чаще одного уведомления «открыл чат» от клиента за 10 минут
 
 # Варианты быстрых ответов в форме — принимаем только их
 DETAIL_OPTIONS = {
@@ -80,6 +81,7 @@ def create_web_app(bot: Bot, db: Database, cfg: Config) -> web.Application:
     index_html = (WEBAPP_DIR / "index.html").read_text(encoding="utf-8").replace("__V__", version)
     # Референсы клиентов — личные фото, поэтому храним их вне публичной папки /uploads
     refs_dir = cfg.data_dir / "refs"
+    chat_notified: dict[int, float] = {}
 
     def auth(data: dict) -> WebAppInitData | None:
         """Проверяет подпись Telegram: запрос действительно пришёл из мини-приложения этого бота."""
@@ -229,10 +231,49 @@ def create_web_app(bot: Bot, db: Database, cfg: Config) -> web.Application:
             "aftercare": _plain(await db.get_setting("aftercare") or ""),
         })
 
+    async def chat(request: web.Request) -> web.Response:
+        """Клиент нажал «Задать вопрос» — сообщаем админам, кто именно пишет мастеру."""
+        data = await read_json(request)
+        init = auth(data) if data is not None else None
+        if init is None:
+            return web.json_response({"error": "Откройте приложение через Telegram"}, status=401)
+        user = init.user
+        now = time.time()
+        if now - chat_notified.get(user.id, 0) < CHAT_NOTIFY_PAUSE:
+            return web.json_response({"ok": True})
+        chat_notified[user.id] = now
+
+        client = await db.client_by_user(user.id)
+        name = html.escape(client["name"] if client else (user.first_name or "Без имени"))
+        lines = [f'💬 <a href="tg://user?id={user.id}">{name}</a> открыл(а) чат с мастером, чтобы задать вопрос.']
+        if client:
+            lines.append(f"📱 {format_phone(client['phone'])}")
+        if user.username:
+            lines.append(f"Telegram: @{html.escape(user.username)}")
+        topic = _clean(data.get("topic"), 100)
+        if topic:
+            lines.append(f"📅 Про сеанс {html.escape(topic)}")
+        lines.append("\nЕсли сообщение не придёт — можно написать клиенту первым.")
+        rows = []
+        if user.username:
+            rows.append([InlineKeyboardButton(text="✉️ Написать клиенту", url=f"https://t.me/{user.username}")])
+        if client:
+            rows.append([InlineKeyboardButton(text="👤 Карточка клиента", callback_data=f"cl:c:{client['id']}")])
+        for admin_id in cfg.admin_ids:
+            try:
+                await bot.send_message(
+                    admin_id, "\n".join(lines),
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None,
+                )
+            except Exception:
+                log.exception("Не удалось уведомить админа %s о вопросе", admin_id)
+        return web.json_response({"ok": True})
+
     app.router.add_get("/", index)
     app.router.add_get("/api/content", content)
     app.router.add_post("/api/apply", apply)
     app.router.add_post("/api/me", me)
+    app.router.add_post("/api/chat", chat)
     app.router.add_static("/static", WEBAPP_DIR / "static")
     cfg.uploads_dir.mkdir(parents=True, exist_ok=True)
     app.router.add_static("/uploads", cfg.uploads_dir)
