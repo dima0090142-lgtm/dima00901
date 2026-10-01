@@ -172,10 +172,19 @@
     const master = state.content && state.content.master;
     return `Здравствуйте${master ? ", " + master : ""}!`;
   }
-  function openChat(draft) {
+  function openChat(draft, topic) {
     const c = state.content || {};
     const user = c.master_chat || c.bot;
     if (!user) return;
+    // Предупреждаем мастера в боте, кто сейчас напишет. keepalive — запрос дойдёт, даже если приложение свернётся
+    if (inTelegram) {
+      fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ initData: tg.initData, topic: topic || "" }),
+        keepalive: true,
+      }).catch(() => {});
+    }
     const text = draft || `${greeting()} У меня вопрос по татуировке: `;
     const url = `https://t.me/${user}?text=${encodeURIComponent(text)}`;
     if (tg && tg.openTelegramLink) tg.openTelegramLink(url); else openLink(url);
@@ -190,7 +199,8 @@
       openMap();
     } else if (e.target.closest(".chat-btn")) {
       haptic();
-      openChat(e.target.closest(".chat-btn").dataset.draft);
+      const btn = e.target.closest(".chat-btn");
+      openChat(btn.dataset.draft, btn.dataset.topic);
     }
   });
 
@@ -226,6 +236,7 @@
     const map = el("button", "chip-btn map-btn", "📍 Как добраться");
     const chat = el("button", "chip-btn chat-btn", "💬 Написать");
     chat.dataset.draft = `${greeting()} Я записан(а) на сеанс ${s.day} ${s.month} в ${s.time}. Вопрос: `;
+    chat.dataset.topic = `${s.day} ${s.month} в ${s.time}`;
     actions.append(map, chat);
     body.append(actions);
     card.append(date, body);
