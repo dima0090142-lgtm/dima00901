@@ -67,6 +67,12 @@ def _plain(text: str) -> str:
     return html.unescape(re.sub(r"<[^>]+>", "", text or "")).strip()
 
 
+def _username(value: str) -> str:
+    """«@name», «t.me/name» или «https://t.me/name» → «name»."""
+    value = re.sub(r"^(https?://)?(t\.me/|telegram\.me/)?@?", "", (value or "").strip())
+    return value if re.fullmatch(r"[A-Za-z0-9_]{4,32}", value) else ""
+
+
 def create_web_app(bot: Bot, db: Database, cfg: Config) -> web.Application:
     app = web.Application(client_max_size=8 * 1024 * 1024)
     # Версия нужна, чтобы Telegram не показывал старые файлы из кэша после обновления
@@ -118,6 +124,7 @@ def create_web_app(bot: Bot, db: Database, cfg: Config) -> web.Application:
             "about": await db.get_setting("about") or "",
             "address": await db.get_setting("address") or "",
             "map_url": await db.get_setting("map_url") or "",
+            "master_chat": _username(await db.get_setting("master_chat") or ""),
             "contacts": await db.get_setting("contacts") or "",
             "faq": [{"q": f["question"], "a": f["answer"]} for f in faq],
             "promos": [p["text"] for p in promos],
