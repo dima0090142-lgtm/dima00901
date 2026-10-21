@@ -11,6 +11,7 @@ from aiohttp import web
 
 from app import VERSION
 from app.ai import ContentAI
+from app.backup import email_enabled
 from app.config import Config
 from app.db import Database
 from app.handlers import admin, channel, clients, user
@@ -21,7 +22,10 @@ log = logging.getLogger("tattoo-bot")
 
 
 async def setup_bot_ui(bot: Bot, cfg: Config) -> None:
-    await bot.set_my_commands([BotCommand(command="start", description="Записаться на тату")])
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Записаться на тату"),
+        BotCommand(command="privacy", description="Обработка персональных данных"),
+    ])
     for admin_id in cfg.admin_ids:
         try:
             await bot.set_my_commands(
@@ -61,6 +65,8 @@ async def main() -> None:
     ai = ContentAI(cfg, db)
     if not ai.enabled:
         log.info("AI_BASE_URL / AI_API_KEY / AI_MODEL не заданы — ИИ-помощник для канала выключен")
+    if not email_enabled(cfg):
+        log.warning("SMTP_USER / SMTP_PASSWORD не заданы — резервная копия на почту не отправляется")
     dp = Dispatcher(storage=MemoryStorage(), db=db, cfg=cfg, ai=ai)
     dp.include_router(channel.channel_watch)
     dp.include_router(channel.router)

@@ -201,9 +201,18 @@
           </label>
         </div>
 
+        <label class="consent">
+          <input type="checkbox" name="consent" required>
+          <span>Я согласен(на) на обработку персональных данных</span>
+        </label>
+        <details class="privacy">
+          <summary>Подробнее о согласии</summary>
+          <p id="privacy-text"></p>
+        </details>
+
         <p class="error" id="form-error" role="alert" hidden></p>
         <button class="cta cta-wide" type="submit" id="submit-btn">Отправить заявку</button>
-        <p class="hint">Нажимая кнопку, вы соглашаетесь на обработку персональных данных. Стоимость обсуждается на консультации.</p>
+        <p class="hint">Стоимость обсуждается на консультации.</p>
       </form>
     </section>
 

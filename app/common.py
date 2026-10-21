@@ -76,3 +76,13 @@ def booking_kb(webapp_url: str) -> InlineKeyboardMarkup | None:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="✍️ Записаться на консультацию", web_app=WebAppInfo(url=webapp_url))
     ]])
+
+
+def review_kb(yandex_url: str | None, gis_url: str | None) -> InlineKeyboardMarkup | None:
+    """Кнопки «Оставить отзыв» — клиент сам выбирает, где ему удобнее."""
+    row = []
+    if yandex_url:
+        row.append(InlineKeyboardButton(text="⭐ Яндекс Карты", url=yandex_url))
+    if gis_url:
+        row.append(InlineKeyboardButton(text="⭐ 2ГИС", url=gis_url))
+    return InlineKeyboardMarkup(inline_keyboard=[row]) if row else None

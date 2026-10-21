@@ -2,7 +2,15 @@ from html import escape
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
-from aiogram.types import CallbackQuery, KeyboardButton, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+)
 
 from ..common import booking_kb
 from ..config import Config
@@ -16,6 +24,19 @@ SHARE_PHONE_KB = ReplyKeyboardMarkup(
     resize_keyboard=True,
     one_time_keyboard=True,
 )
+
+CONSENT_KB = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="✅ Согласен(на)", callback_data="pd:yes")],
+    [InlineKeyboardButton(text="📄 Подробнее", callback_data="pd:info")],
+])
+CONSENT_TEXT = (
+    "🔒 <b>Обработка персональных данных</b>\n\n"
+    "Чтобы записать вас и присылать напоминания о сеансах, нам нужны ваше имя, номер телефона и данные Telegram. "
+    "Мы храним их только для работы студии и не передаём третьим лицам.\n\n"
+    "Нажимая «Согласен(на)», вы даёте согласие на обработку персональных данных по 152-ФЗ. "
+    "Подробнее — кнопка ниже или команда /privacy."
+)
+ASK_PHONE_TEXT = "Уже были у нас? Поделитесь номером — узнаем вас и будем присылать напоминания о сеансах."
 
 
 def welcome_text(cfg: Config, is_admin: bool) -> str:
@@ -77,6 +98,8 @@ async def start_invite(message: Message, command: CommandObject, db: Database, c
                 "Теперь мы пришлём сюда подтверждение записи, напоминание о сеансе и памятку по уходу.",
             )
     await message.answer(welcome_text(cfg, user.id in cfg.admin_ids), reply_markup=booking_kb(cfg.webapp_url))
+    if user.id not in cfg.admin_ids and not await db.has_consent(user.id):
+        await message.answer(CONSENT_TEXT, reply_markup=CONSENT_KB)
 
 
 @router.message(CommandStart())
@@ -84,11 +107,42 @@ async def start(message: Message, db: Database, cfg: Config) -> None:
     user = message.from_user
     await db.upsert_user(user.id, user.first_name, user.username)
     await message.answer(welcome_text(cfg, user.id in cfg.admin_ids), reply_markup=booking_kb(cfg.webapp_url))
-    if user.id not in cfg.admin_ids and await db.client_by_user(user.id) is None:
-        await message.answer(
-            "Уже были у нас? Поделитесь номером — узнаем вас и будем присылать напоминания о сеансах.",
-            reply_markup=SHARE_PHONE_KB,
-        )
+    if user.id in cfg.admin_ids:
+        return
+    if not await db.has_consent(user.id):
+        await message.answer(CONSENT_TEXT, reply_markup=CONSENT_KB)
+    elif await db.client_by_user(user.id) is None:
+        await message.answer(ASK_PHONE_TEXT, reply_markup=SHARE_PHONE_KB)
+
+
+@router.callback_query(F.data == "pd:yes")
+async def consent_yes(callback: CallbackQuery, db: Database) -> None:
+    user = callback.from_user
+    await db.upsert_user(user.id, user.first_name, user.username)
+    await db.set_consent(user.id)
+    await callback.message.edit_text(
+        f"{callback.message.html_text}\n\n✅ <b>Согласие получено.</b> Спасибо!", reply_markup=None
+    )
+    await callback.answer()
+    if await db.client_by_user(user.id) is None:
+        await callback.message.answer(ASK_PHONE_TEXT, reply_markup=SHARE_PHONE_KB)
+
+
+@router.callback_query(F.data == "pd:info")
+async def consent_info(callback: CallbackQuery, db: Database) -> None:
+    await send_privacy(callback.message, db, with_button=not await db.has_consent(callback.from_user.id))
+    await callback.answer()
+
+
+@router.message(Command("privacy"))
+async def privacy(message: Message, db: Database) -> None:
+    await send_privacy(message, db, with_button=not await db.has_consent(message.from_user.id))
+
+
+async def send_privacy(message: Message, db: Database, with_button: bool) -> None:
+    text = escape(await db.get_setting("privacy") or "")
+    markup = InlineKeyboardMarkup(inline_keyboard=[CONSENT_KB.inline_keyboard[0]]) if with_button else None
+    await message.answer(f"🔒 <b>Согласие на обработку персональных данных</b>\n\n{text}", reply_markup=markup)
 
 
 @router.message(F.contact)
@@ -98,6 +152,11 @@ async def shared_contact(message: Message, db: Database, cfg: Config, bot: Bot) 
     user = message.from_user
     if contact.user_id != user.id:
         await message.answer("Пожалуйста, поделитесь своим номером кнопкой ниже.", reply_markup=SHARE_PHONE_KB)
+        return
+    if not await db.has_consent(user.id):
+        await message.answer("Сначала, пожалуйста, подтвердите согласие — номер мы пока не сохранили.",
+                             reply_markup=ReplyKeyboardRemove())
+        await message.answer(CONSENT_TEXT, reply_markup=CONSENT_KB)
         return
     name = " ".join(filter(None, [contact.first_name, contact.last_name])) or user.first_name
     existing = await db.client_by_user(user.id)

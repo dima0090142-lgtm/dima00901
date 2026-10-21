@@ -128,6 +128,7 @@ def create_web_app(bot: Bot, db: Database, cfg: Config) -> web.Application:
             "map_url": await db.get_setting("map_url") or "",
             "master_chat": _username(await db.get_setting("master_chat") or ""),
             "contacts": await db.get_setting("contacts") or "",
+            "privacy": await db.get_setting("privacy") or "",
             "faq": [{"q": f["question"], "a": f["answer"]} for f in faq],
             "promos": [p["text"] for p in promos],
             "portfolio": [f"/uploads/{p['filename']}" for p in photos],
@@ -150,6 +151,8 @@ def create_web_app(bot: Bot, db: Database, cfg: Config) -> web.Application:
             return web.json_response({"error": "Укажите имя"}, status=400)
         if len(re.sub(r"\D", "", phone)) < 10:
             return web.json_response({"error": "Проверьте номер телефона"}, status=400)
+        if data.get("consent") is not True:
+            return web.json_response({"error": "Подтвердите согласие на обработку персональных данных"}, status=400)
         photo = None
         if data.get("photo"):
             photo = _decode_photo(data["photo"])
@@ -169,6 +172,7 @@ def create_web_app(bot: Bot, db: Database, cfg: Config) -> web.Application:
             (refs_dir / ref_file).write_bytes(photo[0])
 
         await db.upsert_user(user.id, user.first_name, user.username)
+        await db.set_consent(user.id)
         client = await db.upsert_client(phone, name, user.id)
         app_id = await db.add_application(
             user.id, name, phone, idea, client["id"] if client else None,

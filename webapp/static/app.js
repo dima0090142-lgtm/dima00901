@@ -142,6 +142,7 @@
     }
     $("#master").textContent = c.master;
     $("#about-text").textContent = c.about;
+    $("#privacy-text").textContent = c.privacy || "";
     $("#address").textContent = c.address;
     $("#footer-address").textContent = c.address;
     $("#contacts").textContent = c.contacts;
@@ -526,9 +527,11 @@
       idea: form.idea.value.trim(),
       details,
       photo: state.photo,
+      consent: form.consent.checked,
     };
     if (!payload.name) return showError("Укажите, как к вам обращаться");
     if (payload.phone.replace(/\D/g, "").length < 10) return showError("Проверьте номер телефона");
+    if (!payload.consent) return showError("Подтвердите согласие на обработку персональных данных");
     if (!payload.initData) return showError("Откройте приложение через Telegram, чтобы отправить заявку");
 
     submitBtn.disabled = true;

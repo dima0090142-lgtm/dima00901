@@ -13,6 +13,7 @@ from aiogram.filters import Command, Filter, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
+    BufferedInputFile,
     CallbackQuery,
     FSInputFile,
     InlineKeyboardButton,
@@ -22,6 +23,7 @@ from aiogram.types import (
 )
 
 from .. import VERSION
+from ..backup import build_backup, email_backup, email_enabled
 from ..common import MONTHS, WEEKDAYS, application_kb, application_text, fmt_dt, parse_dt
 from ..config import Config
 from ..db import Database
@@ -59,9 +61,15 @@ TEXT_KEYS = {
     "pay_details": "Реквизиты для предоплаты",
     "map_url": "Ссылка на карту (кнопка «Как добраться»)",
     "master_chat": "Telegram мастера (кнопка «Задать вопрос»)",
+    "review_text": "Просьба об отзыве после сеанса",
+    "review_yandex": "Ссылка на отзывы в Яндекс Картах",
+    "review_2gis": "Ссылка на отзывы в 2ГИС",
+    "privacy": "Согласие на обработку персональных данных",
 }
 # Эти тексты уходят только в Telegram, поэтому в них сохраняем форматирование (жирный и т. п.)
-HTML_TEXT_KEYS = {"aftercare"}
+HTML_TEXT_KEYS = {"aftercare", "review_text"}
+# Эти тексты — ссылки для кнопок: Telegram принимает только адреса с https://
+URL_TEXT_KEYS = {"map_url", "review_yandex", "review_2gis"}
 
 
 def btn(text: str, data: str) -> InlineKeyboardButton:
@@ -88,6 +96,7 @@ MARKETING_KB = kb(
 SETTINGS_KB = kb(
     [btn("❓ FAQ", "adm:faq"), btn("🔥 Акции", "adm:promos")],
     [btn("🖼 Фото", "adm:port"), btn("✏️ Тексты", "adm:texts")],
+    [btn("💾 Резервная копия", "adm:backup")],
     [btn("⬅️ В меню", "adm:menu")],
 )
 MARKETING_BACK = [btn("⬅️ Продвижение", "adm:mkt")]
@@ -433,13 +442,14 @@ async def cancel_appt(callback: CallbackQuery, db: Database, cfg: Config) -> Non
 
 
 @router.callback_query(F.data.startswith("appt:came:") | F.data.startswith("appt:noshow:"))
-async def arrival(callback: CallbackQuery, db: Database, bot: Bot) -> None:
+async def arrival(callback: CallbackQuery, db: Database, bot: Bot, cfg: Config) -> None:
     _, action, appt_id = callback.data.split(":")
     came = action == "came"
     await db.set_appointment_status(int(appt_id), "came" if came else "no_show")
     note = "✅ Клиент пришёл" if came else "❌ Клиент не пришёл"
     if came:
         note += "\n" + await send_aftercare(bot, db, int(appt_id))
+        note += f"\n⭐ Через {cfg.review_delay_hours:g} ч клиенту придёт просьба оставить отзыв (Яндекс или 2ГИС)."
     await callback.message.edit_text(f"{callback.message.html_text}\n\n<b>{note}</b>")
     await callback.answer("Отмечено")
 
@@ -790,9 +800,38 @@ async def text_edit(callback: CallbackQuery, state: FSMContext, db: Database) ->
 async def text_save(message: Message, state: FSMContext, db: Database) -> None:
     data = await state.get_data()
     text = message.html_text if data["key"] in HTML_TEXT_KEYS else message.text
+    if data["key"] in URL_TEXT_KEYS and not re.fullmatch(r"https?://\S+", text.strip()):
+        await message.answer("Пришлите ссылку целиком, начиная с https:// — например, скопируйте её из браузера.")
+        return
     await db.set_setting(data["key"], text.strip()[:3000])
     await state.clear()
     await message.answer("✅ Сохранено. В приложении уже обновилось.", reply_markup=MENU_KB)
+
+
+# ---------- резервная копия ----------
+
+@router.callback_query(F.data == "adm:backup")
+async def backup(callback: CallbackQuery, db: Database, cfg: Config) -> None:
+    """Присылает JSON с клиентами и записями сюда и, если настроена почта, на почту."""
+    await callback.answer("Готовлю копию…")
+    if email_enabled(cfg):
+        try:
+            filename, body = await email_backup(db, cfg)
+            status = f"📧 Копия отправлена на {escape(cfg.backup_email)}."
+        except Exception as e:
+            log.exception("Не удалось отправить резервную копию на почту")
+            filename, body = await build_backup(db, cfg)
+            status = f"⚠️ На почту отправить не удалось ({type(e).__name__}) — проверьте SMTP_USER и SMTP_PASSWORD."
+    else:
+        filename, body = await build_backup(db, cfg)
+        status = "📧 Почта не настроена (SMTP_USER и SMTP_PASSWORD) — копия только здесь."
+    await callback.message.answer_document(
+        BufferedInputFile(body, filename),
+        caption=(
+            f"💾 <b>Резервная копия</b>: клиенты, заявки, сеансы и предоплаты.\n{status}\n\n"
+            f"Автоматически копия уходит на почту каждый день после {cfg.backup_hour}:00."
+        ),
+    )
 
 
 @router.message(StateFilter(None), F.text & ~F.text.startswith("/"))

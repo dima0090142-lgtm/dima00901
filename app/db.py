@@ -98,6 +98,25 @@ DEFAULT_SETTINGS = {
     "address": "Владивосток, Светланская ул., 23, стр. 2, этаж 3",
     "map_url": "https://yandex.ru/maps/org/tattoo_kult/59781186856/",
     "master_chat": "@MasterBoli_VDK",
+    "review_yandex": "https://yandex.ru/maps/org/tattoo_kult/59781186856/reviews/",
+    "review_2gis": "https://2gis.ru/vladivostok/search/%D0%A2%D0%B0%D1%82%D1%83-%D0%9A%D1%83%D0%BB%D1%8C%D1%82",
+    "review_text": (
+        "Спасибо, что были у нас! 🖤\n\n"
+        "Нам очень важно ваше мнение. Если вам понравилось — оставьте, пожалуйста, отзыв "
+        "там, где вам удобнее. Это займёт минуту и очень поможет мастеру."
+    ),
+    "privacy": (
+        "Оставляя заявку или делясь номером телефона, вы даёте согласие студии «Тату-Культ» на обработку "
+        "ваших персональных данных в соответствии с Федеральным законом № 152-ФЗ «О персональных данных».\n\n"
+        "Какие данные: имя, номер телефона, Telegram ID и имя пользователя, описание идеи татуировки, "
+        "фото-референсы, даты сеансов и предоплат.\n\n"
+        "Зачем: запись на консультацию и сеанс, связь с вами, напоминания о сеансах, памятка по уходу, "
+        "просьба об отзыве и сообщения об акциях.\n\n"
+        "Как храним: данные хранятся на защищённом сервере, резервная копия отправляется на почту студии. "
+        "Мы не передаём ваши данные третьим лицам, кроме случаев, предусмотренных законом.\n\n"
+        "Срок: согласие действует до его отзыва. Чтобы отозвать согласие или удалить данные, "
+        "напишите мастеру — мы удалим их в течение 30 дней."
+    ),
     "contacts": "Запись и вопросы — через это приложение или в личные сообщения Telegram.",
     "aftercare": (
         "Спасибо, что выбрали Тату-Культ! 🖤\n\n"
@@ -173,6 +192,9 @@ class Database:
         await self._add_column("appointments", "client_id", "INTEGER")
         await self._add_column("applications", "details", "TEXT NOT NULL DEFAULT ''")
         await self._add_column("applications", "ref_photo", "TEXT")
+        await self._add_column("users", "pd_consent_at", "INTEGER")
+        await self._add_column("appointments", "came_at", "INTEGER")
+        await self._add_column("appointments", "review_sent", "INTEGER NOT NULL DEFAULT 0")
         for key, value in DEFAULT_SETTINGS.items():
             await self.conn.execute(
                 "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value)
@@ -229,6 +251,15 @@ class Database:
         rows = await self.fetchall("SELECT id FROM users WHERE blocked = 0")
         return [r["id"] for r in rows]
 
+    async def has_consent(self, user_id: int) -> bool:
+        row = await self.fetchone("SELECT pd_consent_at FROM users WHERE id = ?", user_id)
+        return bool(row and row["pd_consent_at"])
+
+    async def set_consent(self, user_id: int) -> None:
+        await self.execute(
+            "UPDATE users SET pd_consent_at = ? WHERE id = ? AND pd_consent_at IS NULL", int(time.time()), user_id
+        )
+
     async def mark_blocked(self, user_id: int) -> None:
         await self.execute("UPDATE users SET blocked = 1 WHERE id = ?", user_id)
 
@@ -278,6 +309,10 @@ class Database:
 
     async def set_appointment_status(self, appt_id: int, status: str) -> None:
         await self.execute("UPDATE appointments SET status = ? WHERE id = ?", status, appt_id)
+        if status == "came":
+            await self.execute(
+                "UPDATE appointments SET came_at = COALESCE(came_at, ?) WHERE id = ?", int(time.time()), appt_id
+            )
 
     async def upcoming_appointments(self) -> list[dict]:
         return await self.fetchall(
@@ -311,6 +346,17 @@ class Database:
             "SELECT * FROM appointments WHERE status = 'scheduled' AND asked = 0 AND starts_at + ? <= ?",
             delay, now,
         )
+
+    async def appointments_to_review(self, now: int, delay: int) -> list[dict]:
+        """Сеансы, после которых пора попросить отзыв (клиент пришёл, прошло delay секунд)."""
+        return await self.fetchall(
+            f"""SELECT a.*, {CHAT_ID} AS chat_id FROM appointments a LEFT JOIN clients c ON c.id = a.client_id
+               WHERE a.status = 'came' AND a.review_sent = 0 AND a.came_at IS NOT NULL AND a.came_at + ? <= ?""",
+            delay, now,
+        )
+
+    async def mark_review_sent(self, appt_id: int) -> None:
+        await self.execute("UPDATE appointments SET review_sent = 1 WHERE id = ?", appt_id)
 
     async def mark_reminded(self, appt_id: int) -> None:
         await self.execute("UPDATE appointments SET reminded = 1 WHERE id = ?", appt_id)

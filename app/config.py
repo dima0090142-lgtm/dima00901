@@ -55,6 +55,13 @@ class Config:
     ai_base_url: str
     ai_api_key: str
     ai_model: str
+    review_delay_hours: float
+    smtp_host: str
+    smtp_port: int
+    smtp_user: str
+    smtp_password: str
+    backup_email: str
+    backup_hour: int
 
     @property
     def db_path(self) -> Path:
@@ -90,4 +97,12 @@ class Config:
             ai_base_url=os.getenv("AI_BASE_URL", "").strip(),
             ai_api_key=os.getenv("AI_API_KEY", "").strip(),
             ai_model=os.getenv("AI_MODEL", "").strip(),
+            review_delay_hours=float(os.getenv("REVIEW_DELAY_HOURS", "3")),
+            smtp_host=os.getenv("SMTP_HOST", "smtp.gmail.com").strip(),
+            smtp_port=int(os.getenv("SMTP_PORT", "465")),
+            smtp_user=os.getenv("SMTP_USER", "").strip(),
+            # Пароль приложения Gmail показывается с пробелами («abcd efgh …») — они не нужны
+            smtp_password=os.getenv("SMTP_PASSWORD", "").replace(" ", ""),
+            backup_email=os.getenv("BACKUP_EMAIL", "dima0090142@gmail.com").strip(),
+            backup_hour=int(os.getenv("BACKUP_HOUR", "3")),
         )

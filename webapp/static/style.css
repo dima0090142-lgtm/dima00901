@@ -478,6 +478,12 @@ details[open] p { animation: rise-in 0.4s var(--ease); }
 }
 .field input::placeholder, .field textarea::placeholder { color: #5d574f; }
 
+.consent { display: flex; gap: 10px; align-items: flex-start; margin: 4px 0 8px; font-size: 14px; cursor: pointer; }
+.consent input { width: 18px; height: 18px; margin: 1px 0 0; flex: none; accent-color: var(--gold); }
+.privacy { margin: 0 0 14px; font-size: 13px; color: var(--muted); }
+.privacy summary { cursor: pointer; color: var(--gold); }
+.privacy p { margin: 8px 0 0; white-space: pre-line; line-height: 1.5; }
+
 .error { color: var(--danger); margin: 0 0 8px; font-size: 14px; animation: shake 0.4s; }
 @keyframes shake { 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
 .hint { margin: 12px 0 0; font-size: 12px; color: var(--muted); text-align: center; }
