@@ -4,6 +4,7 @@ import time
 from html import escape
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramForbiddenError
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from .ai import ContentAI
@@ -35,8 +36,8 @@ async def tick(bot: Bot, db: Database, cfg: Config) -> None:
     address = await db.get_setting("address") or ""
 
     for appt in await db.appointments_to_remind(now):
-        await db.mark_reminded(appt["id"])
         if not appt["chat_id"]:
+            await db.mark_reminded(appt["id"])
             continue
         try:
             await bot.send_message(
@@ -46,8 +47,12 @@ async def tick(bot: Bot, db: Database, cfg: Config) -> None:
                 "Хорошо выспитесь, поешьте и не употребляйте алкоголь. "
                 "Если планы изменились — пожалуйста, предупредите нас.",
             )
+        except TelegramForbiddenError:
+            log.warning("Клиенту %s недоступны сообщения бота", appt["chat_id"])
         except Exception:
-            log.warning("Не удалось отправить напоминание клиенту %s", appt["chat_id"])
+            log.exception("Не удалось отправить напоминание клиенту %s", appt["chat_id"])
+            continue
+        await db.mark_reminded(appt["id"])
 
     for appt in await db.appointments_to_ask(now, cfg.arrival_check_minutes * 60):
         await db.mark_asked(appt["id"])
